@@ -27,6 +27,7 @@ def generate_response(
     messages: List[Dict[str, str]],
     model="qwen-plus",
     max_retries: int = 3,
+    temperature: float = 0.2,
     initial_backoff: float = 1.0,
     timeout: float = 300.0,
 ) -> str:
@@ -37,6 +38,7 @@ def generate_response(
         messages: List of message dictionaries with 'role' and 'content' keys
         model: Model name to use for generation
         max_retries: Maximum number of retry attempts
+        temperature: Llm temperature (default: 0.2)
         initial_backoff: Initial backoff time in seconds (doubles on each retry)
         timeout: Request timeout in seconds (default: 300.0)
 
@@ -55,7 +57,7 @@ def generate_response(
             response = llm.chat.completions.create(
                 model=model,
                 messages=messages,
-                temperature=0.2,
+                temperature=temperature,
                 timeout=timeout,
             )
 

@@ -78,6 +78,7 @@ def llm_judge(origin_text: str, text: str) -> Optional[float]:
                 {"role": "user", "content": prompt},
             ],
             model="qwen-max",
+            temperature=0.0,
         )
 
         # 从响应中提取评分
@@ -123,7 +124,7 @@ def vision_judge_page(question: str, pdf_path: str, page_num: int) -> Optional[f
 
     try:
         # 调用视觉模型API
-        response = generate_vlm_response(prompt, images=page_image_path)
+        response = generate_vlm_response(prompt, images=page_image_path, temperature=0.0)
         # 从响应中提取评分
         score = extract_score(response)
         if score >= 0.9:

@@ -33,6 +33,7 @@ def generate_response(
     prompt: str,
     images: Optional[Union[str, List[str]]] = None,
     model: str = "qwen3-vl-flash",
+    temperature: float = 0.2,
     max_retries: int = 3,
     initial_backoff: float = 1.0,
 ) -> str:
@@ -44,6 +45,7 @@ def generate_response(
         prompt: Text prompt for the model
         images: Optional image path(s) or base64 encoded image(s). Can be a single path/string or a list
         model: Model name to use for generation (default: "qwen-vl-plus")
+        temperature: Llm temperature (default: 0.2)
         max_retries: Maximum number of retry attempts
         initial_backoff: Initial backoff time in seconds (doubles on each retry)
 
@@ -89,7 +91,7 @@ def generate_response(
             response = vlm_client.chat.completions.create(
                 model=model,
                 messages=messages,
-                temperature=0.2,
+                temperature=temperature,
             )
 
             if not response.choices or not response.choices[0].message.content:
