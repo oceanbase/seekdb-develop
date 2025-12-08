@@ -400,9 +400,8 @@ $ wget -O ./rag/data/dataset.zip https://obcommunityprod.oss-cn-shanghai.aliyunc
 
 该评分函数主要从三个方面对每个问题的回答进行评估，每个提问并计算一个综合分数:
 
-- 页面匹配度（满分 25 分）
-- 文件名匹配度（满分 25 分）
-- 答案内容相似度（满分 50 分）
+- 页面匹配度（满分 30 分）
+- 答案内容相似度（满分 70 分）
 
 具体的分数计算方式与 [eval.py](./rag/eval.py) 代码相同
 
@@ -473,7 +472,7 @@ options:
   --answer ANSWER  Path to the answer JSON file (ground truth)
 
 Examples:
-  cd rag && python3 eval.py --output ./data/output.json --answer ./data/train.json
+  cd rag && python3 eval.py --dataset ./data/dataset/ --output ./data/output.json --answer ./data/train.json
 ```
 
 #### 评测逻辑
