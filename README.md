@@ -332,9 +332,6 @@ $ wget -O ./rag/data/dataset.zip https://obcommunityprod.oss-cn-shanghai.aliyunc
     "question": "千味央厨的成立时间是什么时候？"
   },
   {
-    "question": "千味央厨的财务报表预测中，预计2024年的营业收入是多少？"
-  },
-  {
     "question": "千味央厨的主要产品有哪些类别？"
   }
 ]
@@ -353,12 +350,6 @@ $ wget -O ./rag/data/dataset.zip https://obcommunityprod.oss-cn-shanghai.aliyunc
     "answer": "千味央厨成立于2012年。",
     "filename": "千味央厨-公司深度报告打造央厨之道服务千万餐饮-22121364页.pdf",
     "page": 8
-  },
-  {
-    "question": "千味央厨的财务报表预测中，预计2024年的营业收入是多少？",
-    "answer": "千味央厨预计2024年的营业收入为2,459百万元。",
-    "filename": "千味央厨-首次覆盖报告受益餐饮工业化趋势大B端壁垒赋能小B端降维打击-22052929页.pdf",
-    "page": 27
   },
   {
     "question": "千味央厨的主要产品有哪些类别？",
@@ -380,12 +371,6 @@ $ wget -O ./rag/data/dataset.zip https://obcommunityprod.oss-cn-shanghai.aliyunc
     "answer": "xxx",
     "filename": "xxx.pdf",
     "page": 1
-  },
-  {
-    "question": "千味央厨的财务报表预测中，预计2024年的营业收入是多少？",
-    "answer": "xxx",
-    "filename": "xxx.pdf",
-    "page": 2
   },
   {
     "question": "千味央厨的主要产品有哪些类别？",

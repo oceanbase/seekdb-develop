@@ -126,6 +126,18 @@ def vision_judge_page(question: str, pdf_path: str, page_num: int) -> Optional[f
         response = generate_vlm_response(prompt, images=page_image_path)
         # 从响应中提取评分
         score = extract_score(response)
+        if score >= 0.9:
+            score = 1.0
+        elif score >= 0.7:
+            score = 0.89
+        elif score >= 0.5:
+            score = 0.69
+        elif score >= 0.3:
+            score = 0.49
+        elif score >= 0.1:
+            score = 0.09
+        elif score > 0.0:
+            score = 0.09
         return score
     except Exception as e:
         _logger.warning(f"Error in vision_judge_page: {e}")
