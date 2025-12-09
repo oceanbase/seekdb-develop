@@ -136,7 +136,7 @@ def vision_judge_page(question: str, pdf_path: str, page_num: int) -> Optional[f
         elif score >= 0.3:
             score = 0.49
         elif score >= 0.1:
-            score = 0.09
+            score = 0.29
         elif score > 0.0:
             score = 0.09
         return score
