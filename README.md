@@ -234,17 +234,35 @@ python3.9 mldr_data_test.py --lang en --query_types bm25
 #### 约束条件
 
 为了大家的精力更加集中在全文检索场景的代码优化中，同时为了提高测试效率，再次做一些约束与约定。
-- 集中于内核源码逻辑功能修改：
-  - 允许新增或修改 C/C++ 源文件，包括引入 SIMD 指令（如 SSE、AVX2、AVX-512）的手写向量化实现；
-  - 允许使用标准库或项目已包含的工具函数；
-  - 不允许修改构建脚本（如 build.sh）、依赖项（deps/ 目录）、CMake/Makefile 中的全局编译选项（如 -O3 → -Ofast、-march=native 等）；
-  - 允许在源码中通过 #ifdef __AVX512F__ 等方式条件编译新指令集代码，但需保证在不支持该指令集的平台上能回退到通用实现。
-- 必须保持完整的 SQL 执行路径
-  - 查询必须经过现有的 SQL 解析器、执行引擎、存储引擎和索引模块，禁止绕过执行流程
-- 不允许使用额外的缓存机制。只允许现有缓存机制，如 kv cache、buffer pool 等。
-  - 禁止新增结果缓存等“记忆化”优化。
-- 数据完整性要求
-  - 测试时，表及其全文索引中必须包含全量数据，不得通过减少数据量来提升性能。
+1. 集中于内核源码逻辑功能修改：
+- 允许引入 SIMD 指令（如 SSE、AVX2、AVX-512）向量化实现，但需保证在不支持该指令集的平台上能回退到通用实现
+- 允许使用标准库或项目已包含的工具函数；
+- 不允许修改构建脚本（如 build.sh）、依赖项（deps/ 目录）、CMake/Makefile 中的全局编译选项（如 -O3 → -Ofast、-march=native 等），但允许为包含 SIMD 指令的特定源文件单独指定指令集编译标志（如 -mavx2、-mavx512f）
+2. 必须保持完整的 SQL 执行路径
+- 禁止绕过 SQL 解析层（如直接调用索引 API）
+- 禁止跳过执行引擎逻辑（如在 Parser 阶段直接返回结果）
+- 优化逻辑应具有泛化性
+  - 严禁通过字符串匹配硬编码分支
+  - 允许为特定查询模式设计专用执行算子，此类实现应覆盖该模式下的所有合法查询，而非仅针对个别 SQL 文本
+3. 如需引入缓存机制，须遵循以下要求：
+- 允许使用的缓存形式
+  - 内存结构缓存（仅适用于内存占用较小、生命周期明确的轻量级元数据缓存场景）：使用 seekdb 内核已有的、能被 seekdb 感知的原生缓存组件，例如 ob_hashmap、ob_kvcache 等
+  - 持久化存储缓存：若需新增持久化缓存结构，必须通过 seekdb 提供的存储接口实现，实现方式包括但不限于：
+    - 使用 TmpFile 机制（参考：src/storage/tmp_file/ob_tmp_file_manager.h，示例见 mittest/mtlenv/storage/tmp_file/test_tmp_file.cpp）
+    - 创建专用的系统表或内部表
+- 严格禁止的行为
+  - 不得引入任何形式的查询结果缓存（Query Result Cache） 
+  - 不得实现脱离数据库存储引擎的私有缓存，包括但不限于：
+    - 内存中的 LRU 执行计划缓存、解析树缓存
+    - 自行维护的全局哈希表（未接入 ob_kvcache 等框架）
+    - 基于文件/共享内存的自定义缓存（未走 seekdb 接口）
+4. 数据完整性要求
+- 测试时，表及其全文索引中必须包含全量数据，不得通过减少数据量来提升性能
+- 表数据不得采样、截断或过滤
+- 索引必须基于完整数据构建，不得使用子集索引
+5. 系统资源限制 
+- 数据库进程的物理内存占用不得超过 11 GB
+- 测试环境将通过 Linux cgroups v2 为 observer 进程施加 11G 内存限制，并禁止 swap（memory.max=11GB，memory.swap.max=0），超过 11G 内存自动触发 OOM（如何启用 Linux cgroups v2可参考 [cgroup-cn/cgroup-v2/Linux启用cgroup v2.md at main · fairyfar/cgroup-cn](https://github.com/fairyfar/cgroup-cn/blob/main/cgroup-v2/Linux启用cgroup%20v2.md)）
 
 ---
 
