@@ -249,7 +249,7 @@ python3.9 mldr_data_test.py --lang en --query_types bm25
   - 内存结构缓存（仅适用于内存占用较小、生命周期明确的轻量级元数据缓存场景）：使用 seekdb 内核已有的、能被 seekdb 感知的原生缓存组件，例如 ob_hashmap、ob_kvcache 等
   - 持久化存储缓存：若需新增持久化缓存结构，必须通过 seekdb 提供的存储接口实现，实现方式包括但不限于：
     - 使用 TmpFile 机制（参考：src/storage/tmp_file/ob_tmp_file_manager.h，示例见 mittest/mtlenv/storage/tmp_file/test_tmp_file.cpp）
-    - 创建专用的系统表或内部表
+    - 创建专用的系统表或内部表，可以参考 Internal_Tables_Guide.md
 - 严格禁止的行为
   - 不得引入任何形式的查询结果缓存（Query Result Cache） 
   - 不得实现脱离数据库存储引擎的私有缓存，包括但不限于：
