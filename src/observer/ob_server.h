@@ -163,19 +163,6 @@ public:
     bool is_inited_;
   };
 
-  class ObRefreshNetworkSpeedTask: public common::ObTimerTask
-  {
-  public:
-    ObRefreshNetworkSpeedTask();
-    virtual ~ObRefreshNetworkSpeedTask() {}
-    int init(ObServer *observer, int tg_id);
-    virtual void runTimerTask() override;
-  private:
-    const static int64_t REFRESH_INTERVAL = 1L * 1000L * 1000L;//1hr
-    ObServer *obs_;
-    bool is_inited_;
-  };
-
   class ObRefreshCpuFreqTimeTask: public common::ObTimerTask
   {
   public:

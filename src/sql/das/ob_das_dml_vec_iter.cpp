@@ -686,16 +686,14 @@ int ObEmbeddedVecDMLIterator::generate_domain_rows(const ObChunkDatumStore::Stor
     bool is_sync_interval = false;
     if (OB_FAIL(check_sync_interval(is_sync_interval))) {
       LOG_WARN("fail to check sync interval", K(ret));
-    } else if (is_sync_interval && OB_FAIL(generate_embedded_vec_row(store_row))) {
+    } else if (OB_FAIL(generate_embedded_vec_row(store_row, is_sync_interval))) {
       LOG_WARN("failed to generate embedded vec row", K(ret));
-    } else if (!is_sync_interval) {
-      ret = OB_ITER_END;
     }
   }
   return ret;
 }
 
-int ObEmbeddedVecDMLIterator::generate_embedded_vec_row(const ObChunkDatumStore::StoredRow *store_row)
+int ObEmbeddedVecDMLIterator::generate_embedded_vec_row(const ObChunkDatumStore::StoredRow *store_row, bool is_sync)
 {
   int ret = OB_SUCCESS;
 
@@ -729,25 +727,29 @@ int ObEmbeddedVecDMLIterator::generate_embedded_vec_row(const ObChunkDatumStore:
           int64_t vid = OB_INVALID_ID;
           if (OB_FAIL(get_vid(store_row, vid_idx, vid))) {
             LOG_WARN("failed to get vid", K(ret));
+          } else if (!is_sync) {
+            obj_arr[vid_idx].set_int(vid);
+            obj_arr[embedded_vec_idx].set_null();
           } else if (OB_FAIL(get_chunk_data(store_row, embedded_vec_idx, chunk))) {
             LOG_WARN("failed to project chunk columns for embedding", K(ret));
           } else if (!is_old_row_ && chunk.empty()) {
             obj_arr[vid_idx].set_int(vid);
             obj_arr[embedded_vec_idx].set_null();
-            if (OB_FAIL(rows_.push_back(row))) {
-              LOG_WARN("fail to push back row", K(ret));
-            }
           } else {
             obj_arr[vid_idx].set_int(vid);
             ObString embedded_vector;
-            if (OB_FAIL(!is_old_row_ && ObVectorIndexUtil::get_vector_from_text_by_embedding(allocator_, chunk, vec_index_param, embedded_vector))) {
-              LOG_WARN("failed to get vector from text by embedding", K(ret));
+            if (is_old_row_) {
+              obj_arr[embedded_vec_idx].set_null();
             } else {
-              obj_arr[embedded_vec_idx].set_string(embedded_vector);
-              if (OB_FAIL(rows_.push_back(row))) {
-                LOG_WARN("fail to push back row", K(ret));
+              if (OB_FAIL(ObVectorIndexUtil::get_vector_from_text_by_embedding(allocator_, chunk, vec_index_param, embedded_vector))) {
+                LOG_WARN("failed to get vector from text by embedding", K(ret));
+              } else {
+                obj_arr[embedded_vec_idx].set_string(embedded_vector);
               }
             }
+          }
+          if (OB_SUCC(ret) && OB_FAIL(rows_.push_back(row))) {
+            LOG_WARN("fail to push back row", K(ret));
           }
         }
       }
@@ -785,6 +787,13 @@ int ObEmbeddedVecDMLIterator::get_chunk_data(const ObChunkDatumStore::StoredRow 
   } else {
     const int64_t main_table_embedded_idx = row_projector_->at(embedded_vec_idx);
     chunk = store_row->cells()[main_table_embedded_idx].get_string();
+    if (OB_FAIL(ObTextStringHelper::read_real_string_data(&allocator_,
+                                                          ObLongTextType,
+                                                          CS_TYPE_BINARY,
+                                                          true,
+                                                          chunk))) {
+      LOG_WARN("fail to get real data.", K(ret), K(chunk));
+    }
   }
   return ret;
 }

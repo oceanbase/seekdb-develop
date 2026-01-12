@@ -151,7 +151,7 @@ int ObVectorIndexUtil::parser_params_from_string(
           int64_t int_value = 0;
           if (OB_FAIL(ObSchemaUtils::str_to_int(new_param_value, int_value))) {
             LOG_WARN("fail to str_to_int", K(ret), K(new_param_value));
-          } else if (int_value >= 1 && int_value <= 1000) {
+          } else if (int_value >= 1 && int_value <= 160000) {
             param.ef_search_ = int_value;
           } else {
             ret = OB_NOT_SUPPORTED;
@@ -375,14 +375,6 @@ int ObVectorIndexUtil::parser_params_from_string(
         if (index_type == ObVectorIndexType::VIT_SPIV_INDEX) {
           param.type_ = ObVectorIndexAlgorithmType::VIAT_SPIV;
         }
-      }
-    }
-    if (OB_SUCC(ret)) {
-      if (ObVectorIndexAlgorithmType::VIAT_HNSW_BQ == param.type_
-          && ObVectorIndexDistAlgorithm::VIDA_L2 != param.dist_algorithm_) {
-        ret = OB_NOT_SUPPORTED;
-        LOG_WARN("not support distance algorithm for hnsw bq index", K(ret), K(param));
-        LOG_USER_ERROR(OB_NOT_SUPPORTED, "current distance algorithm for hnsw bq index is");
       }
     }
 
@@ -719,7 +711,7 @@ int ObVectorIndexUtil::resolve_query_param(
         } else if (value_node->type_ != T_INT && value_node->type_ != T_NUMBER) {
           ret = OB_INVALID_ARGUMENT;
           LOG_WARN("invalid query param", K(ret), K(i), K(param_name), K(value_node->type_));
-        } else if (! (value_node->value_ >= 1 && value_node->value_ <= 1000)) {
+        } else if (! (value_node->value_ >= 1 && value_node->value_ <= 160000)) {
           ret = OB_INVALID_ARGUMENT;
           LOG_WARN("invalid query param", K(ret), K(i), K(param_name), K(value_node->type_), K(value_node->value_));
         } else {
@@ -1356,6 +1348,32 @@ int ObVectorIndexUtil::check_ivf_lob_inrow_threshold(
     SQL_RESV_LOG(ERROR, "invalid inrow threshold", K(ret), K(lob_inrow_threshold));
     LOG_USER_ERROR(OB_INVALID_ARGUMENT,
       "lob inrow threshold, should be greater than the vector length of the vector column with IVF index");
+  }
+  return ret;
+}
+
+int ObVectorIndexUtil::check_table_has_vector_index(const ObTableSchema &data_table_schema, ObSchemaGetterGuard &schema_guard,
+    bool &has_vec_index)
+{
+  int ret = OB_SUCCESS;
+  ObSEArray<ObAuxTableMetaInfo, 16> simple_index_infos;
+  const int64_t tenant_id = data_table_schema.get_tenant_id();
+  has_vec_index = false;
+
+  if (OB_FAIL(data_table_schema.get_simple_index_infos(simple_index_infos))) {
+    LOG_WARN("fail to get simple index infos failed", K(ret));
+  } else {
+    for (int64_t i = 0; OB_SUCC(ret) && !has_vec_index && i < simple_index_infos.count(); ++i) {
+      const ObTableSchema *index_table_schema = nullptr;
+      if (OB_FAIL(schema_guard.get_table_schema(tenant_id, simple_index_infos.at(i).table_id_, index_table_schema))) {
+        LOG_WARN("fail to get index_table_schema", K(ret), K(tenant_id), "table_id", simple_index_infos.at(i).table_id_);
+      } else if (OB_ISNULL(index_table_schema)) {
+        ret = OB_TABLE_NOT_EXIST;
+        LOG_WARN("index table schema should not be null", K(ret), K(simple_index_infos.at(i).table_id_));
+      } else if (index_table_schema->is_vec_index()) {
+        has_vec_index = true;
+      }
+    }
   }
   return ret;
 }
@@ -3156,7 +3174,7 @@ int ObVectorIndexUtil::check_index_param(
             LOG_USER_ERROR(OB_NOT_SUPPORTED, "this value of vector index ef_construction is");
           }
         } else if (last_variable == "EF_SEARCH") {
-          if (parser_value >= 1 && parser_value <= 1000 ) {
+          if (parser_value >= 1 && parser_value <= 160000 ) {
             ef_search_is_set = true;
           } else {
             ret = OB_NOT_SUPPORTED;
@@ -3343,14 +3361,6 @@ int ObVectorIndexUtil::check_index_param(
           LOG_WARN("not support vector index param", K(ret), K(last_variable));
           LOG_USER_ERROR(OB_NOT_SUPPORTED, "this value of vector index ef_search is");
         }
-      }
-    }
-
-    if (OB_SUCC(ret) && type_hnsw_bq_is_set) {
-      if (type_hnsw_bq_is_set && distance_name != "L2") {
-        ret = OB_NOT_SUPPORTED;
-        LOG_WARN("not support distance algorithm for hnsw bq index", K(ret), K(distance_name));
-        LOG_USER_ERROR(OB_NOT_SUPPORTED, "current distance algorithm for hnsw bq index is");
       }
     }
 
@@ -6370,6 +6380,53 @@ int ObVectorIndexUtil::check_need_embedding_when_rebuild(const ObString &old_idx
   }
   return ret;
 }
+
+int ObDasSemanticIndexInfo::generate(const schema::ObTableSchema *data_schema,
+                                     const schema::ObTableSchema *rowkey_domain_schema,
+                                     int64_t result_output_count,
+                                     bool has_trans_info_expr)
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(data_schema) || OB_ISNULL(rowkey_domain_schema)) {
+    ret = OB_INVALID_ARGUMENT;
+    LOG_WARN("invalid arguments", K(ret), KP(data_schema), KP(rowkey_domain_schema));
+  } else {
+    is_emb_vec_tbl_ = rowkey_domain_schema->is_hybrid_vec_index_embedded_type();
+    use_rowkey_vid_tbl_ = !data_schema->is_table_with_hidden_pk_column();
+    part_key_num_ = 0;
+    ObVectorIndexParam vec_index_param;
+    if (data_schema->is_table_with_hidden_pk_column() && data_schema->is_partitioned_table()) {
+      int64_t trans_expr_cnt = has_trans_info_expr ? 1 : 0;
+      if (result_output_count == (rowkey_domain_schema->get_column_count() + trans_expr_cnt)) {
+        schema::ObTableSchema::const_column_iterator col_begin = data_schema->column_begin();
+        schema::ObTableSchema::const_column_iterator col_end = data_schema->column_end();
+        for (; OB_SUCC(ret) && col_begin != col_end; col_begin++) {
+          const schema::ObColumnSchemaV2 *col_schema = *col_begin;
+          if (OB_ISNULL(col_schema)) {
+            ret = OB_ERR_UNEXPECTED;
+            LOG_WARN("unexpected nullptr column schema", K(ret));
+          } else if (col_schema->is_tbl_part_key_column()) {
+            part_key_num_++;
+          }
+        }
+      }
+    }
+    if (OB_FAIL(ret)) {
+    }else if (OB_FAIL(ObVectorIndexUtil::parser_params_from_string(rowkey_domain_schema->get_index_params(), ObVectorIndexType::VIT_HNSW_INDEX, vec_index_param))) {
+      LOG_WARN("fail to parser params from string", K(ret), K(rowkey_domain_schema->get_index_params()));
+    } else {
+      sync_interval_type_ = vec_index_param.sync_interval_type_;
+    }
+  }
+  LOG_INFO("has generate semantic_index_info for das ", K(*this), K(result_output_count), K(rowkey_domain_schema->get_column_count()), K(has_trans_info_expr));
+  return ret;
+}
+
+OB_SERIALIZE_MEMBER(ObDasSemanticIndexInfo,
+                    is_emb_vec_tbl_,
+                    use_rowkey_vid_tbl_,
+                    part_key_num_,
+                    sync_interval_type_);
 
 }
 }

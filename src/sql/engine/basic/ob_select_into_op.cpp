@@ -1197,7 +1197,7 @@ int ObSelectIntoOp::write_single_char_to_file(const char *wchar, ObCsvFileWriter
       data_writer.set_curr_pos(pos + 1);
     } else if (OB_FAIL(use_shared_buf(data_writer, buf, buf_len, pos))) {
       LOG_WARN("failed to use shared buffer", K(ret));
-    } 
+    }
   }
   if (OB_SUCC(ret) && use_shared_buf_) {
     if (pos < buf_len) {

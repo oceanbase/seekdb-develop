@@ -1273,7 +1273,7 @@ int ObServer::check_if_schema_ready()
   while (OB_SUCC(ret) && !stop_ && !schema_ready) {
     schema_ready = schema_service_.is_sys_full_schema();
     if (!schema_ready) {
-      SLEEP(1);
+      ob_usleep(10 * 1000);
     }
   }
   FLOG_INFO("check if schema ready", KR(ret), K(stop_), K(schema_ready));
@@ -1294,16 +1294,17 @@ int ObServer::check_if_timezone_usable()
 {
   int ret = OB_SUCCESS;
   bool timezone_usable = false;
+  while (OB_SUCC(ret) && !stop_ && !timezone_usable) {
+    timezone_usable = tenant_timezone_mgr_.is_usable();
+    if (!timezone_usable) {
+      (void) (tenant_timezone_mgr_.refresh_timezone_info());
+      ob_usleep(10 * 1000);
+    }
+  }
   if (FAILEDx(tenant_timezone_mgr_.start())) {
     LOG_ERROR("fail to start tenant timezone mgr", KR(ret));
   } else {
     FLOG_INFO("success to start tenant timezone mgr");
-  }
-  while (OB_SUCC(ret) && !stop_ && !timezone_usable) {
-    timezone_usable = tenant_timezone_mgr_.is_usable();
-    if (!timezone_usable) {
-      ob_usleep(10 * 1000);
-    }
   }
   FLOG_INFO("check if timezone usable", KR(ret), K(stop_), K(timezone_usable));
   return ret;
@@ -1901,7 +1902,7 @@ int ObServer::init_config(const ObServerOptions &opts)
     LOG_ERROR("failed to load data_version_mgr file", KR(ret));
   } else {
     // set dump path
-    const char *dump_path = "etc/observer.config.bin";
+    const char *dump_path = "etc/seekdb.config.bin";
     char buffer[PATH_MAX];
     ObSqlString abs_dump_path;
     if (getcwd(buffer, sizeof(buffer)) == nullptr) {
@@ -2342,16 +2343,6 @@ int ObServer::init_io()
                                                       &OB_IO_MANAGER,
                                                       &ObDeviceManager::get_instance()))) {
           LOG_ERROR("log_io_device_wrapper init failed", KR(ret));
-        } else {
-          if (log_block_mgr_.is_reserved()) {
-            int64_t clog_pool_in_use = 0;
-            int64_t clog_pool_total_size = 0;
-            if (OB_FAIL(log_block_mgr_.get_disk_usage(clog_pool_in_use, clog_pool_total_size))) {
-               LOG_ERROR("get clog disk size failed", KR(ret));
-            } else {
-              log_disk_size = clog_pool_total_size;
-            }
-          }
         }
         if (OB_SUCC(ret)) {
           storage_env_.data_disk_size_ = data_disk_size;
@@ -2864,11 +2855,9 @@ int ObServer::init_storage()
   bool clogdir_is_empty = false;
 
   if (OB_SUCC(ret)) {
-    int64_t total_log_disk_size = 0;
     int64_t log_disk_in_use = 0;
     // Check if the clog directory is empty
-    if (OB_FAIL(log_block_mgr_.get_disk_usage(
-            log_disk_in_use, total_log_disk_size))) {
+    if (OB_FAIL(log_block_mgr_.get_disk_usage(log_disk_in_use))) {
       LOG_ERROR("ObServerLogBlockMgr get_disk_usage failed", K(ret));
     } else if (0 == log_disk_in_use
         && OB_FAIL(logservice::ObServerLogBlockMgr::check_clog_directory_is_empty(
@@ -3383,29 +3372,6 @@ int ObServer::refresh_temp_table_sess_active_time()
     LOG_ERROR("session mgr is null", KR(ret));
   } else if (OB_FAIL(GCTX.session_mgr_->for_each_session(refesh_time))) {
     LOG_WARN("failed to traverse each session to check table need be dropped", KR(ret));
-  }
-  return ret;
-}
-
-ObServer::ObRefreshNetworkSpeedTask::ObRefreshNetworkSpeedTask()
-: obs_(nullptr), is_inited_(false)
-{}
-
-int ObServer::ObRefreshNetworkSpeedTask::init(ObServer *obs, int tg_id)
-{
-  int ret = OB_SUCCESS;
-  if (OB_UNLIKELY(is_inited_)) {
-    ret = OB_INIT_TWICE;
-    LOG_ERROR("ObRefreshNetworkSpeedTask has already been inited", KR(ret));
-  } else if (OB_ISNULL(obs)) {
-    ret = OB_ERR_UNEXPECTED;
-    LOG_ERROR("ObRefreshNetworkSpeedTask init with null ptr", KR(ret), K(obs));
-  } else {
-    obs_ = obs;
-    is_inited_ = true;
-    if (OB_FAIL(TG_SCHEDULE(tg_id, *this, REFRESH_INTERVAL, true /*schedule repeatly*/))) {
-      LOG_ERROR("fail to schedule task ObRefreshNetworkSpeedTask", KR(ret));
-    }
   }
   return ret;
 }

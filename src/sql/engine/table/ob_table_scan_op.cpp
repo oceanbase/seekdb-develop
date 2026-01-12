@@ -1668,9 +1668,7 @@ int ObTableScanOp::inner_open()
       if (PHY_TABLE_SCAN == MY_SPEC.get_type()) {
         // heap table ddl doesn't have sample scan, report checksum directly
         report_checksum_ = true;
-      } else if (PHY_BLOCK_SAMPLE_SCAN == MY_SPEC.get_type() ||
-                 PHY_ROW_SAMPLE_SCAN == MY_SPEC.get_type() ||
-                 PHY_DDL_BLOCK_SAMPLE_SCAN == MY_SPEC.get_type()) {
+      } else if (IS_SAMPLE_SCAN(MY_SPEC.get_type())) {
         // normal ddl need sample scan first, report_cheksum_ will be marked as true when rescan
         report_checksum_ = false;
       }
@@ -3453,38 +3451,36 @@ int ObTableScanOp::multivalue_get_pure_data(
   }
 
   if (OB_FAIL(ret)) {
+  } else if (OB_FAIL(extend_domain_obj_buffer(record_num))) {
+    LOG_WARN("failed to extend obobj buffer.", K(ret));
   } else if (use_docid) {
     uint32_t pure_data_size = 0;
     rowkey_end = column_count - 1;
     rowkey_start = rowkey_end - data_rowkey_cnt;
-    if (OB_FAIL(extend_domain_obj_buffer(SAPTIAL_INDEX_DEFAULT_ROW_COUNT))) { // or record_num
-      LOG_WARN("failed to extend obobj buffer.", K(ret));
-    } else {
-      ObObj tmp_objs[column_count];
+    ObObj tmp_objs[column_count];
 
-      for (uint32_t j = rowkey_start; OB_SUCC(ret) && j < rowkey_end; ++j) {
-        tmp_objs[j].set_nop_value();
-        ObDatum *datum = nullptr;
-        ObExpr *expr = exprs.at(j);
+    for (uint32_t j = rowkey_start; OB_SUCC(ret) && j < rowkey_end; ++j) {
+      tmp_objs[j].set_nop_value();
+      ObDatum *datum = nullptr;
+      ObExpr *expr = exprs.at(j);
 
-        if (j == domain_index_.domain_column_idx_) {
-        } else if (OB_FAIL(expr->eval(eval_ctx_, datum))) {
-          LOG_WARN("expression evaluate failed", K(ret));
-        } else if (OB_FAIL(datum->to_obj(tmp_objs[j], expr->obj_meta_))) {
-          LOG_WARN("stored row to new row obj failed", K(ret), K(*datum), K(expr->obj_meta_));
-        } else {
-          pure_data_size += tmp_objs[j].get_serialize_size();
-        }
+      if (j == domain_index_.domain_column_idx_) {
+      } else if (OB_FAIL(expr->eval(eval_ctx_, datum))) {
+        LOG_WARN("expression evaluate failed", K(ret));
+      } else if (OB_FAIL(datum->to_obj(tmp_objs[j], expr->obj_meta_))) {
+        LOG_WARN("stored row to new row obj failed", K(ret), K(*datum), K(expr->obj_meta_));
+      } else {
+        pure_data_size += tmp_objs[j].get_serialize_size();
       }
+    }
 
-      if (OB_SUCC(ret)) {
-        if (record_num < 6) {
-          is_save_rowkey = true;
-        } else if (pure_data_size > 48 && scan_ctdef.table_param_.is_partition_table()) {
-          is_save_rowkey = false;
-        } else {
-          is_save_rowkey = true;
-        }
+    if (OB_SUCC(ret)) {
+      if (record_num < 6) {
+        is_save_rowkey = true;
+      } else if (pure_data_size > 48 && scan_ctdef.table_param_.is_partition_table()) {
+        is_save_rowkey = false;
+      } else {
+        is_save_rowkey = true;
       }
     }
   }

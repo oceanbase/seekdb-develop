@@ -30,14 +30,14 @@
 #include "lib/charset/ob_charset.h"
 
 PYBIND11_MODULE(PYTHON_MODEL_NAME, m) {
-    m.doc() = "OceanBase SeekDB";
+    m.doc() = "OceanBase seekdb";
     char embed_version_str[oceanbase::common::OB_SERVER_VERSION_LENGTH];
     oceanbase::common::VersionUtil::print_version_str(embed_version_str, sizeof(embed_version_str), DATA_CURRENT_VERSION);
     m.attr("__version__") = embed_version_str;
 
     const char *default_service_path = "./seekdb.db";
     m.def("open", &oceanbase::embed::ObLiteEmbed::open, pybind11::arg("db_dir") = default_service_path, "open db");
-    m.def("_open_with_service", &oceanbase::embed::ObLiteEmbed::open_with_service, pybind11::arg("db_dir") = default_service_path,
+    m.def("open_with_service", &oceanbase::embed::ObLiteEmbed::open_with_service, pybind11::arg("db_dir") = default_service_path,
                                                   pybind11::arg("port") = 2881,
                                                  "open db");
 
@@ -220,7 +220,7 @@ int ObLiteEmbed::do_open_(const char* db_dir, int64_t port)
     MPRINT("db %s opened by other process", db_dir);
   } else if (FALSE_IT(pid_locked = true)) {
   } else {
-    OB_LOGGER.set_log_level("INFO");
+    OB_LOGGER.set_log_level(DEFAULT_LOG_LEVEL);
     ObSqlString log_file;
     if (OB_FAIL(log_file.assign_fmt("%s/log/seekdb.log", opts.base_dir_.ptr()))) {
       MPRINT("calculate log file failed %d", ret);
@@ -928,6 +928,16 @@ int ObLiteEmbedUtil::convert_result_to_pyobj(const int64_t col_idx, common::sqlc
       }
       break;
     }
+    case ObHexStringType: {
+      ObObj obj;
+      if (OB_FAIL(result.get_obj(col_idx, obj))) {
+        LOG_WARN("get obj failed", K(ret), K(col_idx));
+      } else {
+        ObString hex_str = obj.get_hex_string();
+        val = pybind11::bytes(hex_str.ptr(), hex_str.length());
+      }
+      break;
+    }
     case ObTinyTextType:
     case ObTextType:
     case ObMediumTextType:
@@ -939,6 +949,8 @@ int ObLiteEmbedUtil::convert_result_to_pyobj(const int64_t col_idx, common::sqlc
           LOG_WARN("get obj failed", K(ret), K(col_idx));
         } else if (OB_FAIL(sql::ObTextStringHelper::read_real_string_data(&allocator, obj, real_data))) {
           LOG_WARN("failed to read real string data", K(ret), K(obj));
+        } else if (obj_meta.get_collation_type() == ObCollationType::CS_TYPE_BINARY) {
+          val = pybind11::bytes(real_data.ptr(), real_data.length());
         } else {
           ObString out_str;
           if (OB_FAIL(convert_string_charset(session, allocator, real_data,
@@ -995,19 +1007,21 @@ int ObLiteEmbedUtil::convert_result_to_pyobj(const int64_t col_idx, common::sqlc
       break;
     }
     case ObCollectionSQLType: {
-      ObObj obj;
-      ObArenaAllocator allocator(mem_attr);
-      ObString res_str;
-      if (OB_FAIL(result.get_obj(col_idx, obj))) {
-        LOG_WARN("get obj failed", K(ret), K(col_idx));
-      } else if (OB_FAIL(convert_collection_to_string(obj, obj_meta, inner_result, allocator, res_str))) {
-        LOG_WARN("convert collection failed", KR(ret), K(obj), K(obj_meta));
-        if (ret == OB_NOT_SUPPORTED) {
-          val = pybind11::bytes(obj.get_string_ptr(), obj.get_string_len());
-          ret = OB_SUCCESS;
+      MTL_SWITCH(OB_SYS_TENANT_ID) {
+        ObObj obj;
+        ObArenaAllocator allocator(mem_attr);
+        ObString res_str;
+        if (OB_FAIL(result.get_obj(col_idx, obj))) {
+          LOG_WARN("get obj failed", K(ret), K(col_idx));
+        } else if (OB_FAIL(convert_collection_to_string(obj, obj_meta, inner_result, allocator, res_str))) {
+          LOG_WARN("convert collection failed", KR(ret), K(obj), K(obj_meta));
+          if (ret == OB_NOT_SUPPORTED) {
+            val = pybind11::bytes(obj.get_string_ptr(), obj.get_string_len());
+            ret = OB_SUCCESS;
+          }
+        } else {
+          val = pybind11::str(res_str.ptr(), res_str.length());
         }
-      } else {
-        val = pybind11::str(res_str.ptr(), res_str.length());
       }
       break;
     }

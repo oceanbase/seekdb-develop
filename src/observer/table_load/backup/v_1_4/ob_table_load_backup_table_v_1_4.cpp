@@ -109,9 +109,9 @@ int ObTableLoadBackupTable_V_1_4::parse_path(const ObString &path)
   int ret = OB_SUCCESS;
   int64_t pos = 0;
   char buf[OB_MAX_URI_LENGTH];
-  if (OB_FAIL(databuff_printf(buf, OB_MAX_URI_LENGTH, pos, "%.*s", 
+  if (OB_FAIL(databuff_printf(buf, OB_MAX_URI_LENGTH, pos, "%.*s",
                               path.length(), path.ptr()))) {
-    LOG_WARN("fail to fill buf", KR(ret), K(pos), K(path));                            
+    LOG_WARN("fail to fill buf", KR(ret), K(pos), K(path));
   } else {
     if (buf[pos - 1] != '/') {
       buf[pos++] = '/';
@@ -149,6 +149,7 @@ int ObTableLoadBackupTable_V_1_4::parse_path(const ObString &path)
     }
   }
   
+
 
   return ret;
 }

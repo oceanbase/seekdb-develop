@@ -571,7 +571,11 @@ int ObDASHNSWScanIter::save_distance_expr_result(ObNewRow *row)
     double dis_value = 0;
     if (is_hybrid_ && is_hnsw_bq()) {
       if (OB_FAIL(calc_dis_by_vid(row->get_cell(1), dis_value))) {
-        LOG_WARN("failed to process adaptor state", K(ret));
+        if (ret == OB_ITER_END) {
+          // failed to find rowkey or vector by vid
+          ret = OB_ERR_DEFENSIVE_CHECK;
+        }
+        LOG_WARN("failed to process adaptor state", K(ret), K(row->get_cell(1)));
       }
     } else {
       dis_value = row->get_cell(0).get_float();
@@ -731,7 +735,11 @@ int ObDASHNSWScanIter::save_distance_expr_result(ObNewRow *row, int64_t size)
       if (is_hybrid_ && is_hnsw_bq()) {
         ObObj& vid_obj = row->get_cell(i * a_batch_obj_cnt + 1);
         if (OB_FAIL(calc_dis_by_vid(vid_obj, dis_value))) {
-          LOG_WARN("failed to calc distance by vid", K(ret));
+          if (ret == OB_ITER_END) {
+            // failed to find rowkey or vector by vid
+            ret = OB_ERR_DEFENSIVE_CHECK;
+          }
+          LOG_WARN("failed to calc distance by vid", K(ret), K(vid_obj));
         }
       } else {
         ObObj& dist_obj = row->get_cell(i * a_batch_obj_cnt);
@@ -1496,7 +1504,6 @@ int ObDASHNSWScanIter::process_adaptor_state_pre_filter(
   } else if (OB_FAIL(process_adaptor_state_pre_filter_with_idx_filter(ada_ctx, adaptor, brute_vids, brute_cnt, is_vectorized))) {
     LOG_WARN("hnsw pre filter(idx iter) failed to query result.", K(ret));
   }
-  // TODO(ningxin.ning): support pre_filter_brute_force for ipivf
   // ipivf not support cal_distance_by_id, so set go_brute_force_=false when using ipivf index.
   if (is_ipivf()) {
     go_brute_force_ = false;
@@ -1648,6 +1655,9 @@ int ObDASHNSWScanIter::process_adaptor_state_pre_filter_with_rowkey(
       LOG_WARN("failed to allocator vids", K(ret));
     } else {
       go_brute_force_ = true;
+      if (is_ipivf()) {
+        go_brute_force_ = false;
+      }
       const ObDASScanCtDef *rowkey_vid_ctdef = vec_aux_ctdef_->get_vec_aux_tbl_ctdef(vec_aux_ctdef_->get_rowkey_vid_tbl_idx(), ObTSCIRScanType::OB_VEC_ROWKEY_VID_SCAN);
       int64_t batch_row_count = vec_aux_rtdef_->eval_ctx_->max_batch_size_ > 0 ?
                                 min(vec_aux_rtdef_->eval_ctx_->max_batch_size_, ObVectorParamData::VI_PARAM_DATA_BATCH_SIZE) :
@@ -1744,17 +1754,6 @@ int ObDASHNSWScanIter::process_adaptor_state_pre_filter_with_rowkey(
           LOG_WARN("ret of check iter filter need retry.", K(ret), K(can_retry_), K(adaptive_ctx_), K(vec_index_type_), K(vec_idx_try_path_));
         }
       } // end while
-      // TODO(ningxin.ning): ipivf支持暴搜后移除该代码
-      if (go_brute_force_ && is_ipivf()) {
-        if (OB_ITER_END == ret) {
-          ret = OB_SUCCESS;
-        }
-        for (int j = 0; OB_SUCC(ret) && j < brute_cnt; ++j) {
-          if (OB_FAIL(adaptor->add_extra_valid_vid(ada_ctx, vids[j]))) {
-            LOG_WARN("failed to add valid vid", K(ret));
-          }
-        }
-      }
     }
     if (OB_ITER_END != ret && OB_SUCCESS != ret) {
       LOG_WARN("get next row failed.", K(ret));
@@ -1992,6 +1991,9 @@ int ObDASHNSWScanIter::get_vid_from_idx_filter(
 {
   int ret = OB_SUCCESS;
   go_brute_force_ = true;
+  if (is_ipivf()) {
+    go_brute_force_ = false;
+  }
   bool index_end = false;
   ObArray<double*> relevance_record;
   const ObDASScanCtDef *rowkey_vid_ctdef = vec_aux_ctdef_->get_vec_aux_tbl_ctdef(vec_aux_ctdef_->get_rowkey_vid_tbl_idx(),
@@ -2195,6 +2197,9 @@ int ObDASHNSWScanIter::get_pk_increment_from_idx_filter(
 {
   int ret = OB_SUCCESS;
   go_brute_force_ = true;
+  if (is_ipivf()) {
+    go_brute_force_ = false;
+  }
   bool index_end = false;
   ObArray<double*> relevance_record;
   bool if_add_relevance = vec_aux_ctdef_->relevance_col_cnt_ > 0;

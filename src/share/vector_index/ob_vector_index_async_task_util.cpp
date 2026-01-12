@@ -315,7 +315,7 @@ int ObVecIndexAsyncTaskUtil::move_task_to_history_table(
   } else if (OB_FAIL(proxy.write(tenant_id, sql.ptr(), insert_rows))) {
     LOG_WARN("fail to execute sql", K(ret), K(sql), K(tenant_id));
   } else if (OB_FAIL(sql.assign_fmt("DELETE FROM %s"
-          " WHERE tenant_id = %ld AND status = 3 AND gmt_create <= (SELECT gmt_create FROM %s ORDER BY gmt_create desc LIMIT 1)",
+          " WHERE tenant_id = %ld AND status = 3 AND gmt_modified <= (SELECT gmt_modified FROM %s ORDER BY gmt_modified desc LIMIT 1)",
           share::OB_ALL_VECTOR_INDEX_TASK_TNAME,
           ObSchemaUtils::get_extract_tenant_id(tenant_id, tenant_id),
           share::OB_ALL_VECTOR_INDEX_TASK_HISTORY_TNAME))) {
@@ -548,7 +548,6 @@ int ObVecIndexAsyncTaskUtil::resume_task_from_inner_table(
                   LOG_WARN("async task ctx is null", K(ret));
                 } else if (task_result.task_type_ == ObVecIndexAsyncTaskType::OB_VECTOR_ASYNC_HYBRID_VECTOR_EMBEDDING && OB_FALSE_IT(task_ctx = new(task_ctx_buf) ObHybridVectorRefreshTaskCtx())) {
                 } else if (task_result.task_type_ != ObVecIndexAsyncTaskType::OB_VECTOR_ASYNC_HYBRID_VECTOR_EMBEDDING && OB_FALSE_IT(task_ctx = new(task_ctx_buf) ObVecIndexAsyncTaskCtx())) {
-                } else if (OB_FALSE_IT(task_ctx = new(task_ctx_buf) ObVecIndexAsyncTaskCtx())) {
                 } else if (OB_FALSE_IT(task_ctx->task_status_ = task_result)) {
                 } else if (OB_FALSE_IT(task_ctx->task_status_.tenant_id_ = tenant_id)) {
                 } else if (OB_FALSE_IT(task_ctx->task_status_.status_ = ObVecIndexAsyncTaskStatus::OB_VECTOR_ASYNC_TASK_PREPARE)) {
@@ -558,10 +557,12 @@ int ObVecIndexAsyncTaskUtil::resume_task_from_inner_table(
                   LOG_INFO("resume task succ", K(tenant_id), KPC(task_ctx));
                 }
                 // free on failed
-                if (OB_FAIL(ret) && OB_NOT_NULL(task_ctx)) {
-                  task_ctx->~ObVecIndexAsyncTaskCtx();
-                  allocator->free(task_ctx);
-                  task_ctx = nullptr;
+                if (OB_FAIL(ret) || !inc_new_task) {
+                  if (OB_NOT_NULL(task_ctx)) {
+                    task_ctx->~ObVecIndexAsyncTaskCtx();
+                    allocator->free(task_ctx);
+                    task_ctx = nullptr;
+                  }
                 }
               }
             }
@@ -1070,7 +1071,7 @@ void ObVecIndexAsyncTaskHandler::handle(void *task)
     }
   }
   if (OB_NOT_NULL(async_task)
-      && (async_task->get_task_type() != ObVecIndexAsyncTaskType::OB_VECTOR_ASYNC_HYBRID_VECTOR_EMBEDDING || async_task->get_task_ctx()->task_status_.all_finished_)) {
+      && (async_task->get_task_type() != ObVecIndexAsyncTaskType::OB_VECTOR_ASYNC_HYBRID_VECTOR_EMBEDDING || async_task->all_finished())) {
     handle_ls_process_task_cnt(async_task->get_ls_id(), false);
     dec_async_task_ref();
   }
@@ -1179,6 +1180,47 @@ int ObVecIndexIAsyncTask::init(
     ls_id_ = ls_id;
     task_type_ = task_type;
     is_inited_ = true;
+  }
+  return ret;
+}
+
+int ObVecIndexATaskUpdIterator::init() {
+  int ret = OB_SUCCESS;
+  if (OB_FAIL(old_row_.init())) {
+    LOG_WARN("fail to init old rows iter", K(ret));
+  } else if (OB_FAIL(new_row_.init())) {
+    LOG_WARN("fail to init new rows iter", K(ret));
+  }
+  return ret;
+}
+
+int ObVecIndexATaskUpdIterator::add_row(blocksstable::ObDatumRow &old_datum_row, blocksstable::ObDatumRow &new_datum_row) {
+  int ret = OB_SUCCESS;
+  if (OB_FAIL(old_row_.add_row(old_datum_row))) {
+    LOG_WARN("failed to add row to iter", K(ret));
+  } else if (OB_FAIL(new_row_.add_row(new_datum_row))) {
+    LOG_WARN("fail to init new rows iter", K(ret));
+  }
+  return ret;
+}
+
+int ObVecIndexATaskUpdIterator::get_next_row(blocksstable::ObDatumRow *&row)
+{
+  int ret = OB_SUCCESS;
+  if (!got_old_row_) {
+    got_old_row_ = true;
+    if (OB_FAIL(old_row_.get_next_row(row))) {
+      if (OB_ITER_END != ret) {
+        LOG_WARN("fail to get next old row", K(ret));
+      }
+    }
+  } else {
+    got_old_row_ = false;
+    if (OB_FAIL(new_row_.get_next_row(row))) {
+      if (OB_ITER_END != ret) {
+        LOG_WARN("fail to get next new row", K(ret));
+      }
+    }
   }
   return ret;
 }
@@ -1464,12 +1506,12 @@ int ObVecIndexAsyncTask::process_data_for_index(ObPluginVectorIndexAdaptor &adap
           ObString vector_str;
           float *vector_ptr = nullptr;
           const int64_t vec_col_idx = 0;  // ObPluginVectorIndexUtils::read_local_tablet get from INDEX_TYPE_IS_NOT output vector column first
+          blocksstable::ObDatumRow *vector_row = datum_row;
           int32_t vector_column_pos = is_hybrid_index? data_table_rowkey_count + 1: vec_col_idx;
           if (is_hybrid_index && !adaptor.get_is_need_vid()) {
-            //  hybrid without vid_rowkey_tbl:  [pk(vid)] [vector]
-            vector_column_pos = 1;
+            //  hybrid without vid_rowkey_tbl:  [pk(vid)] [part_key] [vector]
+            vector_column_pos = vector_row->get_column_count() - 1;
           }
-          blocksstable::ObDatumRow *vector_row = datum_row;
           if (OB_FAIL(ret)) {
           } else if (vector_row->storage_datums_[vector_column_pos].is_null() || vector_row->storage_datums_[vector_column_pos].is_nop()) { // skip null row
           } else if (FALSE_IT(vector_str = vector_row->storage_datums_[vector_column_pos].get_string())) {

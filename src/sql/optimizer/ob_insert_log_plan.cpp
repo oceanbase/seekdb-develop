@@ -1015,6 +1015,28 @@ int ObInsertLogPlan::prepare_dml_infos()
         if (OB_FAIL(insert_up_index_upd_infos_.at(0)->related_index_ids_.assign(
                     table_dml_info->related_index_ids_))) {
           LOG_WARN("assing related index id failed", K(ret));
+        } else {
+          // Check if UPDATE part needs vector index optimization for heap table
+          // This logic is similar to ObDelUpdResolver::check_vec_hnsw_index_vid_opt()
+          IndexDMLInfo *primary_upd_dml_info = insert_up_index_upd_infos_.at(0);
+          const ObTableSchema *table_schema = nullptr;
+          ObSchemaGetterGuard *schema_guard = optimizer_context_.get_schema_guard();
+          bool has_vec_index = false;
+          if (OB_ISNULL(schema_guard)) {
+            ret = OB_ERR_UNEXPECTED;
+            LOG_WARN("schema guard is null", K(ret));
+          } else if (OB_FAIL(schema_guard->get_table_schema(optimizer_context_.get_session_info()->get_effective_tenant_id(),
+                                                            primary_upd_dml_info->ref_table_id_,
+                                                            table_schema))) {
+            LOG_WARN("failed to get table schema", K(ret), K(primary_upd_dml_info->ref_table_id_));
+          } else if (OB_NOT_NULL(table_schema) && OB_FAIL(ObVectorIndexUtil::check_table_has_vector_index(*table_schema,
+                                                                                                          *schema_guard,
+                                                                                                          has_vec_index))) {
+            LOG_WARN("failed to check has vector index", K(ret));
+          } else if (has_vec_index && table_schema->is_table_with_hidden_pk_column()) {
+            primary_upd_dml_info->is_update_primary_key_ = true;
+            primary_upd_dml_info->is_vec_hnsw_index_vid_opt_ = true;
+          }
         }
       }
     } else if (OB_FAIL(ObDelUpdLogPlan::prepare_table_dml_info_special(table_info,

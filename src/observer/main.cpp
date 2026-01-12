@@ -67,7 +67,7 @@ static int create_observer_softlink()
 {
   int ret = OB_SUCCESS;
   char softlink_path[PATH_MAX] = {0};
-  snprintf(softlink_path, PATH_MAX, "%s/observer", PID_DIR);
+  snprintf(softlink_path, PATH_MAX, "%s/seekdb", PID_DIR);
   char target_path[PATH_MAX] = {0};
   ssize_t read_len = readlink("/proc/self/exe", target_path, PATH_MAX - 1);
   if (read_len < 0) {
@@ -78,7 +78,7 @@ static int create_observer_softlink()
   } else if (FALSE_IT(FileDirectoryUtils::unlink_symlink(softlink_path))) {
   } else if (OB_FAIL(FileDirectoryUtils::symlink(target_path, softlink_path))) {
     ret = OB_IO_ERROR;
-    MPRINT("create observer softlink failed, errno=%s", strerror(errno));
+    MPRINT("create seekdb softlink failed, errno=%s", strerror(errno));
   }
   return ret;
 }
@@ -283,9 +283,9 @@ int inner_main(int argc, char *argv[])
 #endif
 
   ObCurTraceId::SeqGenerator::seq_generator_  = ObTimeUtility::current_time();
-  static const int  LOG_FILE_SIZE             = 256 * 1024 * 1024;
-  const char *const LOG_FILE_NAME             = "log/observer.log";
-  const char *const PID_FILE_NAME             = "run/observer.pid";
+  static const int  LOG_FILE_SIZE             = DEFAULT_LOG_FILE_SIZE_MB * 1024 * 1024;
+  const char *const LOG_FILE_NAME             = "log/seekdb.log";
+  const char *const PID_FILE_NAME             = "run/seekdb.pid";
   int               ret                       = OB_SUCCESS;
 
   // change signal mask first.
@@ -310,7 +310,7 @@ int inner_main(int argc, char *argv[])
   setlocale(LC_TIME, "en_US.UTF-8");
   setlocale(LC_NUMERIC, "en_US.UTF-8");
 
-  opts->log_level_ = OB_LOG_LEVEL_WARN;
+  opts->log_level_ = DEFAULT_LOG_LEVEL;
   if (FAILEDx(parse_args(argc, argv, *opts))) {
   }
 

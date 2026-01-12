@@ -230,9 +230,7 @@ int ObDelUpdLogPlan::get_pdml_parallel_degree(const int64_t target_part_cnt,
     LOG_WARN("get unexpected params", K(ret), K(get_optimizer_context().get_query_ctx()),
                                             K(use_pdml_), K(max_dml_parallel_), K(target_part_cnt));
   } else {
-    OPT_TRACE("Decided PDML DOP by Auto DOP.");
-    dop = std::min(max_dml_parallel_, target_part_cnt * PDML_DOP_LIMIT_PER_PARTITION);
-    OPT_TRACE("PDML target partition count:", target_part_cnt, "Max dml parallel", max_dml_parallel_);
+    dop = max_dml_parallel_;
   }
   OPT_TRACE("Get final PDML DOP: ", dop);
   return ret;
@@ -2202,7 +2200,26 @@ int ObDelUpdLogPlan::check_update_primary_key(ObSchemaGetterGuard &schema_guard,
     }
   }
 
-  if (index_schema->is_table_with_hidden_pk_column()) {
+  if (OB_FAIL(ret)) {
+  } else if (OB_FAIL(check_vec_hnsw_index_vid_opt(schema_guard, stmt, index_schema, index_dml_info))) {
+    LOG_WARN("failed to check vec hnsw index vid opt", K(ret));
+  }
+
+  return ret;
+}
+
+
+int ObDelUpdLogPlan::check_vec_hnsw_index_vid_opt(
+    ObSchemaGetterGuard &schema_guard,
+    const ObDelUpdStmt *stmt,
+    const ObTableSchema* index_schema,
+    IndexDMLInfo*& index_dml_info) const
+{
+  int ret = OB_SUCCESS;
+  if (OB_ISNULL(index_schema) || OB_ISNULL(index_dml_info) || OB_ISNULL(stmt)) {
+    ret = OB_ERR_UNEXPECTED;
+    LOG_WARN("get unexpected null", K(ret), K(index_schema), K(index_dml_info));
+  } else if (index_schema->is_table_with_hidden_pk_column()) {
     ObDocIDType vid_type = ObDocIDType::INVALID;
     if (OB_FAIL(ObVectorIndexUtil::determine_vid_type(*index_schema, vid_type))) {
       LOG_WARN("failed to determine vid type", K(ret), K(vid_type));
