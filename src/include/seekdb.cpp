@@ -63,7 +63,11 @@
 #include <cstdio>
 #include <algorithm>  // For std::transform
 #include <unistd.h>
+#ifdef __APPLE__
+#include <sys/mount.h>  // statfs on macOS
+#else
 #include <sys/statfs.h>
+#endif
 #include <sys/mman.h>  // For mmap/munmap
 #include <climits>
 #include <thread>
@@ -311,40 +315,6 @@ static void set_error_code(int code, const char* msg) {
     g_thread_last_error_code = code;
     g_thread_last_error = msg ? msg : "Unknown error";
 }
-
-// Provide missing implementation for ObRefreshNetworkSpeedTask::runTimerTask()
-// 
-// ROOT CAUSE ANALYSIS:
-// The class ObRefreshNetworkSpeedTask has:
-// - An inline destructor: virtual ~ObRefreshNetworkSpeedTask() {}
-// - runTimerTask() declared but NOT implemented in ob_server.cpp
-// 
-// In C++, vtable is generated in the translation unit that contains the first
-// non-inline virtual function implementation. Since all virtual functions are
-// either inline (destructor) or unimplemented (runTimerTask), no vtable is
-// generated in liboceanbase.so, causing the undefined symbol error.
-//
-// SOLUTION:
-// Provide the runTimerTask() implementation here. This will force the compiler
-// to generate the vtable in libseekdb.so. The vtable symbol will be exported
-// and can be resolved by liboceanbase.so at runtime if libseekdb.so is loaded
-// first (via LD_PRELOAD in seekdb_ipc.js).
-//
-// NOTE: We cannot provide a non-inline destructor here because the destructor
-// is already defined inline in ob_server.h. However, implementing runTimerTask()
-// should be sufficient to force vtable generation.
-namespace oceanbase {
-namespace observer {
-
-// Implementation of runTimerTask() to force vtable generation
-void ObServer::ObRefreshNetworkSpeedTask::runTimerTask() {
-    // Stub implementation - this task is not used in FFI/embedded mode.
-    // The actual network speed refresh functionality is not implemented here.
-    // This implementation ensures the vtable is generated in libseekdb.so.
-}
-
-} // namespace observer
-} // namespace oceanbase
 
 extern "C" {
 

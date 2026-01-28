@@ -728,6 +728,7 @@ else()
     DEPENDS fake_observer)
 endif()
 
+# observer: symlink to seekdb (master uses seekdb as main executable)
 add_custom_target(observer ALL
   DEPENDS seekdb
   COMMAND ${CMAKE_COMMAND} -E create_symlink

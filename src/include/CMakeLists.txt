@@ -26,28 +26,38 @@ target_include_directories(seekdb_objects
 # Link against oceanbase for object compilation (headers/symbols)
 target_link_libraries(seekdb_objects PUBLIC oceanbase)
 
-# Create self-contained shared library for FFI
+# Create self-contained shared library for FFI (target name: libseekdb to avoid
+# conflict with the seekdb custom target in src/observer/CMakeLists.txt)
 # This statically links liboceanbase_static.a into libseekdb.so
 # so users only need this single .so file
-# Only create the seekdb library in BUILD_EMBED_MODE to avoid conflict with
-# the seekdb custom target in src/observer/CMakeLists.txt
-if(BUILD_EMBED_MODE)
-  add_library(seekdb
-    SHARED
-    ${FFI_SOURCES}
-  )
+add_library(libseekdb
+  SHARED
+  ${FFI_SOURCES}
+)
 
-  target_include_directories(seekdb
-    PUBLIC
-      ${CMAKE_CURRENT_SOURCE_DIR}
-      ${CMAKE_SOURCE_DIR}/src/libtable/src
-  )
+target_include_directories(libseekdb
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/libtable/src
+)
 
-  # Link oceanbase_static into the shared library
-  # Use --whole-archive to include all symbols from static library
-  # Use -static-libstdc++ and -static-libgcc to avoid runtime dependency on system C++ libraries
-  # Use version script to hide internal symbols (especially malloc/free) to avoid conflicts with V8
-  target_link_libraries(seekdb
+# Link oceanbase_static into the shared library
+# Use --whole-archive (Linux) / -all_load (macOS) to include all symbols from static library
+# On Linux: -static-libstdc++ and -static-libgcc to avoid runtime dependency on system C++ libraries
+# (macOS/clang does not support -static-libgcc/-static-libstdc++)
+# Use version script (Linux) / exported_symbols_list (macOS) to hide internal symbols
+if(APPLE)
+  # macOS: use -force_load only for liboceanbase_static.a to avoid -all_load pulling in both
+  # oblib (with its snappy/lz4) and deps/3rd liblz4.a/libsnappy.a, which causes 68 duplicate symbols.
+  # Linking oceanbase_static without -all_load may yield undefined symbols; if so we need to revisit.
+  target_link_options(libseekdb PRIVATE "LINKER:-force_load,$<TARGET_FILE:oceanbase_static>")
+  target_link_libraries(libseekdb
+    PRIVATE
+      oceanbase_static
+      -Wl,-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/seekdb_export.txt
+  )
+else()
+  target_link_libraries(libseekdb
     PRIVATE
       -Wl,--whole-archive
       oceanbase_static
@@ -57,32 +67,36 @@ if(BUILD_EMBED_MODE)
       -Wl,--allow-multiple-definition
       -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/seekdb.version
   )
+endif()
 
-  # Set library name
-  set_target_properties(seekdb PROPERTIES
-    OUTPUT_NAME "seekdb"
-  )
+# Output file name remains libseekdb.so / libseekdb.dylib
+set_target_properties(libseekdb PROPERTIES
+  OUTPUT_NAME "seekdb"
+)
 
-  # Strip debug symbols in release builds to reduce library size
-  # This significantly reduces the library size (from ~2.6GB to ~400MB)
-  # Note: build.sh release uses RelWithDebInfo, not Release
-  # Strip for all non-Debug builds (Release, RelWithDebInfo, etc.)
-  if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT CMAKE_BUILD_TYPE STREQUAL "debug")
-    add_custom_command(TARGET seekdb POST_BUILD
-      COMMAND ${CMAKE_STRIP} $<TARGET_FILE:seekdb>
+# Strip debug symbols in release builds to reduce library size
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT CMAKE_BUILD_TYPE STREQUAL "debug")
+  if(APPLE)
+    # macOS: -S strip __DWARF (debug), -x strip local symbol table; full strip fails due to indirect symbol table
+    add_custom_command(TARGET libseekdb POST_BUILD
+      COMMAND ${CMAKE_STRIP} -Sx $<TARGET_FILE:libseekdb>
+      COMMENT "Stripping debug and local symbols from libseekdb (macOS)"
+    )
+  else()
+    add_custom_command(TARGET libseekdb POST_BUILD
+      COMMAND ${CMAKE_STRIP} $<TARGET_FILE:libseekdb>
       COMMENT "Stripping debug symbols from libseekdb to reduce size"
     )
   endif()
+endif()
 
-  # Install the shared library and header
-  install(TARGETS seekdb
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib
-    RUNTIME DESTINATION bin
-  )
+# Install the shared library and header
+install(TARGETS libseekdb
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin
+)
 
-  install(FILES seekdb.h
-    DESTINATION include
-  )
-
-endif() # BUILD_EMBED_MODE
+install(FILES seekdb.h
+  DESTINATION include
+)
