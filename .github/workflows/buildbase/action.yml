@@ -33,3 +33,43 @@ runs:
         ccache -z
         cd build_debug && make -j4
         ccache -s
+
+    - name: Build libseekdb
+      shell: bash
+      run: |
+        bash build.sh release -DOB_USE_CCACHE=ON -DBUILD_EMBED_MODE=ON
+        ccache -z
+        cd build_release && make -j4 seekdb
+        ccache -s
+
+    - name: Test Node.js FFI binding
+      shell: bash
+      run: |
+        cd unittest/include/nodejs
+        npm install
+        bash test.sh
+    
+    - name: Test Node.js N-API binding
+      shell: bash
+      run: |
+        cd unittest/include/nodejs_napi
+        npm install
+        bash test.sh
+
+    - name: Test Python binding
+      shell: bash
+      run: |
+        cd unittest/include/python
+        bash test.sh
+
+    - name: Test Rust binding
+      shell: bash
+      run: |
+        cd unittest/include/rust
+        bash test.sh
+
+    - name: Test Go binding
+      shell: bash
+      run: |
+        cd unittest/include/go
+        bash test.sh
