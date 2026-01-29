@@ -16,8 +16,12 @@
 
 #define USING_LOG_PREFIX CLIENT
 #include "seekdb.h"
-#include <string>
+#include <algorithm>
+#include <cstdio>
 #include <cstring>
+#include <mutex>
+#include <string>
+#include <vector>
 #include "common/ob_common_utility.h"  // For set_stackattr()
 #include "lib/mysqlclient/ob_mysql_proxy.h"
 #include "lib/mysqlclient/ob_mysql_result.h"
@@ -55,13 +59,6 @@
 #include "lib/signal/ob_signal_struct.h"  // For SIG_STACK_SIZE
 #include "lib/alloc/alloc_assist.h"  // For ACHUNK_PRESERVE_SIZE
 #include "common/ob_smart_call.h"  // For CALL_WITH_NEW_STACK
-#include <string>
-#include <vector>
-#include <mutex>
-#include <memory>
-#include <cstring>
-#include <cstdio>
-#include <algorithm>  // For std::transform
 #include <unistd.h>
 #ifdef __APPLE__
 #include <sys/mount.h>  // statfs on macOS
@@ -70,7 +67,6 @@
 #endif
 #include <sys/mman.h>  // For mmap/munmap
 #include <climits>
-#include <thread>
 #include <csignal>
 #include <cstdlib>
 
@@ -249,6 +245,33 @@ struct SeekdbStmtData {
 
 // VARBINARY(512) length for _id column; semantics from bind type (SEEKDB_TYPE_VARBINARY_ID), no SQL parsing
 static const unsigned int VARBINARY_ID_LENGTH = 512;
+
+// VECTOR read: convert raw float32 binary to JSON string "[v1, v2, ...]" without precision rounding.
+// Directly formats each float (e.g. 1.1, 2.2, 3.3) so result is "[1.1, 2.2, 3.3]".
+static bool vector_binary_to_json(const char* ptr, int64_t len, std::string& out) {
+    if (!ptr || len <= 0 || (len % sizeof(float)) != 0) {
+        out.clear();
+        return false;
+    }
+    const int64_t n = len / static_cast<int64_t>(sizeof(float));
+    const float* f = reinterpret_cast<const float*>(ptr);
+    std::string buf;
+    buf.reserve(static_cast<size_t>(n * 16));
+    buf.push_back('[');
+    char num[64];
+    for (int64_t i = 0; i < n; ++i) {
+        int wr = snprintf(num, sizeof(num), "%g", f[i]);
+        if (wr <= 0 || wr >= static_cast<int>(sizeof(num))) {
+            out.clear();
+            return false;
+        }
+        if (i > 0) buf.append(", ");
+        buf.append(num, static_cast<size_t>(wr));
+    }
+    buf.push_back(']');
+    out = std::move(buf);
+    return true;
+}
 
 // Global state
 static std::mutex g_init_mutex;
@@ -1570,13 +1593,16 @@ static int do_seekdb_execute_inner(ExecuteParams* params) {
                 field.catalog = "def";
                 field.catalog_length = 3;
                 
-                // Extract type information
-                // Check if type is not null and get the type
+                // Extract type information (align with MySQL protocol type map where applicable)
                 if (!ob_field.type_.is_null()) {
                     oceanbase::common::ObObjType obj_type = ob_field.type_.get_type();
-                    // Check if type is valid using ob_is_valid_obj_type
                     if (oceanbase::common::ob_is_valid_obj_type(obj_type)) {
-                        field.type = static_cast<int32_t>(obj_type);
+                        if (obj_type == oceanbase::common::ObCollectionSQLType) {
+                            // VECTOR: MySQL protocol sends as MYSQL_TYPE_STRING; C ABI report as SEEKDB_TYPE_STRING
+                            field.type = static_cast<int32_t>(SEEKDB_TYPE_STRING);
+                        } else {
+                            field.type = static_cast<int32_t>(obj_type);
+                        }
                     }
                 }
                 
@@ -1761,6 +1787,24 @@ static int do_seekdb_execute_inner(ExecuteParams* params) {
                             pos = snprintf(buf, sizeof(buf), "%.15g", double_val);
                             if (pos > 0 && pos < static_cast<int64_t>(sizeof(buf))) {
                                 row.push_back(std::string(buf, pos));
+                            } else {
+                                row.push_back("");
+                            }
+                        } else {
+                            row.push_back("");
+                        }
+                    } else if (obj_type == oceanbase::common::ObCollectionSQLType) {
+                        // VECTOR: engine returns raw float32 binary; convert to JSON string "[v1, v2, ...]" without rounding.
+                        // Directly format each float so e.g. "[1.1, 2.2, 3.3]".
+                        ObString str_val;
+                        if (OB_SUCCESS == obj.get_string(str_val)) {
+                            if (str_val.length() > 0 && str_val.ptr()) {
+                                std::string json_vec;
+                                if (vector_binary_to_json(str_val.ptr(), str_val.length(), json_vec)) {
+                                    row.push_back(std::move(json_vec));
+                                } else {
+                                    row.push_back(std::string(str_val.ptr(), str_val.length()));
+                                }
                             } else {
                                 row.push_back("");
                             }
@@ -2444,8 +2488,11 @@ int seekdb_row_get_string(SeekdbRow row, int32_t column_index, char* value, size
     }
     
     const std::string& str_val = row_vec[column_index];
-    size_t copy_len = std::min(str_val.length(), value_len - 1);
-    strncpy(value, str_val.c_str(), copy_len);
+    size_t copy_len = std::min(str_val.length(), value_len - 1);  // leave room for null terminator
+    // Use memcpy so binary (e.g. VECTOR little-endian float32) is copied in full, not truncated at '\0'
+    if (copy_len > 0 && str_val.data()) {
+        memcpy(value, str_val.data(), copy_len);
+    }
     value[copy_len] = '\0';
     
     return SEEKDB_SUCCESS;
@@ -4069,11 +4116,9 @@ int seekdb_stmt_execute(SeekdbStmt stmt) {
                         }
                         break;
                     case SEEKDB_TYPE_VECTOR:
-                        // VECTOR type: directly embed JSON array format in SQL
-                        // Input: JSON array format like '[1,2,3]' or [1,2,3]
-                        // Storage: Converted to binary format (float array) by database
-                        // Return: Binary format (float array) when queried via seekdb_row_get_string()
-                        // VECTOR type cannot use standard parameter binding, so we embed it directly
+                        // VECTOR: treat as string per official example (INSERT '[1.2,0.7,1.1]').
+                        // Input: JSON array string from bind (e.g. "[1.1,2.2,3.3]"); embed in SQL as-is.
+                        // Read: C ABI returns JSON string via seekdb_row_get_string() (binary→JSON, no rounding).
                         if (bind.buffer && bind.length && *bind.length > 0) {
                             std::string vec_val(static_cast<const char*>(bind.buffer), *bind.length);
                             // Remove surrounding quotes if present (e.g., "'[1,2,3]'" -> "[1,2,3]")

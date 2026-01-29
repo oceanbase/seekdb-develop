@@ -13,6 +13,7 @@
 #include "seekdb.h"
 #include <cstring>
 #include <cstdlib>
+#include <cmath>
 #include <unistd.h>
 #include <iomanip>
 #include <iostream>
@@ -1401,6 +1402,238 @@ TestResult test_embedded_varbinary_id_binding() {
     }
     seekdb_stmt_close(stmt);
     execute_sql("DROP TABLE IF EXISTS test_embed_varbinary_id");
+    seekdb_connect_close(handle);
+    return {true, ""};
+}
+
+// VECTOR column reading: SELECT returns JSON string without rounding (e.g. "[1.1, 2.2, 3.3]")
+TestResult test_vector_column_reading() {
+    SeekdbHandle handle = nullptr;
+    int ret = seekdb_connect(&handle, "test", true);
+    if (ret != SEEKDB_SUCCESS) {
+        return {false, "Failed to connect"};
+    }
+    auto execute_sql = [&handle](const char* sql) -> int {
+        SeekdbResult result = nullptr;
+        int r = seekdb_query(handle, sql, &result);
+        if (result) seekdb_result_free(result);
+        return r;
+    };
+    execute_sql("DROP TABLE IF EXISTS test_vector_read");
+    ret = execute_sql(
+        "CREATE TABLE test_vector_read (document VARCHAR(255), embedding VECTOR(3))");
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to create table"};
+    }
+    // INSERT one row: document='vec_read_test', embedding=[1.1, 2.2, 3.3]
+    SeekdbStmt stmt = seekdb_stmt_init(handle);
+    if (!stmt) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to init statement"};
+    }
+    const char* insert_sql = "INSERT INTO test_vector_read (document, embedding) VALUES (?, ?)";
+    ret = seekdb_stmt_prepare(stmt, insert_sql, strlen(insert_sql));
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to prepare INSERT"};
+    }
+    const char* doc = "vec_read_test";
+    const char* emb = "[1.1, 2.2, 3.3]";
+    unsigned long len_doc = strlen(doc), len_emb = strlen(emb);
+    bool n1 = false;
+    SeekdbBind ins_binds[2];
+    ins_binds[0].buffer_type = SEEKDB_TYPE_STRING;
+    ins_binds[0].buffer = const_cast<char*>(doc);
+    ins_binds[0].buffer_length = len_doc;
+    ins_binds[0].length = &len_doc;
+    ins_binds[0].is_null = &n1;
+    ins_binds[1].buffer_type = SEEKDB_TYPE_VECTOR;
+    ins_binds[1].buffer = const_cast<char*>(emb);
+    ins_binds[1].buffer_length = len_emb;
+    ins_binds[1].length = &len_emb;
+    ins_binds[1].is_null = &n1;
+    ret = seekdb_stmt_bind_param(stmt, ins_binds);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to bind INSERT"};
+    }
+    ret = seekdb_stmt_execute(stmt);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "INSERT with VECTOR failed"};
+    }
+    seekdb_stmt_close(stmt);
+    // SELECT document, embedding FROM test_vector_read WHERE document = 'vec_read_test'
+    SeekdbResult result = nullptr;
+    ret = seekdb_query(handle, "SELECT document, embedding FROM test_vector_read WHERE document = 'vec_read_test' LIMIT 1", &result);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "SELECT failed"};
+    }
+    result = seekdb_store_result(handle);
+    if (!result) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to store result"};
+    }
+    my_ulonglong row_count = seekdb_num_rows(result);
+    if (row_count != 1) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Expected 1 row, got " + std::to_string(row_count)};
+    }
+    SeekdbRow row = seekdb_fetch_row(result);
+    if (!row) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Failed to fetch row"};
+    }
+    // VECTOR column (embedding) must be readable and non-null
+    if (seekdb_row_is_null(row, 1)) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Embedding column is NULL - VECTOR column reading failed"};
+    }
+    size_t embedding_len = seekdb_row_get_string_len(row, 1);
+    if (embedding_len == 0 || embedding_len == static_cast<size_t>(-1)) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Embedding column length is 0 or invalid - VECTOR not returned"};
+    }
+    // C ABI returns VECTOR as JSON string without rounding, e.g. "[1.1, 2.2, 3.3]"
+    std::vector<char> emb_buf(embedding_len + 1, 0);
+    ret = seekdb_row_get_string(row, 1, emb_buf.data(), emb_buf.size());
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "seekdb_row_get_string(embedding) failed"};
+    }
+    std::string emb_str(emb_buf.data(), embedding_len);
+    if (emb_str.empty() || emb_str.front() != '[' || emb_str.back() != ']') {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "VECTOR should be JSON string format, got: " + emb_str.substr(0, 80)};
+    }
+    // Expect direct format without precision rounding: "[1.1, 2.2, 3.3]"
+    if (emb_str != "[1.1, 2.2, 3.3]") {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "VECTOR expected [1.1, 2.2, 3.3], got: " + emb_str};
+    }
+    seekdb_result_free(result);
+    execute_sql("DROP TABLE IF EXISTS test_vector_read");
+    seekdb_connect_close(handle);
+    return {true, ""};
+}
+
+// VECTOR 读取不做精度处理，直接返回原始值 "[1.1, 2.2, 3.3]"
+TestResult test_vector_column_reading_no_rounding() {
+    SeekdbHandle handle = nullptr;
+    int ret = seekdb_connect(&handle, "test", true);
+    if (ret != SEEKDB_SUCCESS) {
+        return {false, "Failed to connect"};
+    }
+    auto execute_sql = [&handle](const char* sql) -> int {
+        SeekdbResult result = nullptr;
+        int r = seekdb_query(handle, sql, &result);
+        if (result) seekdb_result_free(result);
+        return r;
+    };
+    execute_sql("DROP TABLE IF EXISTS test_vector_read_no_round");
+    ret = execute_sql(
+        "CREATE TABLE test_vector_read_no_round (document VARCHAR(255), embedding VECTOR(3))");
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to create table"};
+    }
+    SeekdbStmt stmt = seekdb_stmt_init(handle);
+    if (!stmt) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to init statement"};
+    }
+    const char* insert_sql = "INSERT INTO test_vector_read_no_round (document, embedding) VALUES (?, ?)";
+    ret = seekdb_stmt_prepare(stmt, insert_sql, strlen(insert_sql));
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to prepare INSERT"};
+    }
+    const char* doc = "vec_no_round";
+    const char* emb = "[1.1, 2.2, 3.3]";
+    unsigned long len_doc = strlen(doc), len_emb = strlen(emb);
+    bool n1 = false;
+    SeekdbBind ins_binds[2];
+    ins_binds[0].buffer_type = SEEKDB_TYPE_STRING;
+    ins_binds[0].buffer = const_cast<char*>(doc);
+    ins_binds[0].buffer_length = len_doc;
+    ins_binds[0].length = &len_doc;
+    ins_binds[0].is_null = &n1;
+    ins_binds[1].buffer_type = SEEKDB_TYPE_VECTOR;
+    ins_binds[1].buffer = const_cast<char*>(emb);
+    ins_binds[1].buffer_length = len_emb;
+    ins_binds[1].length = &len_emb;
+    ins_binds[1].is_null = &n1;
+    ret = seekdb_stmt_bind_param(stmt, ins_binds);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to bind INSERT"};
+    }
+    ret = seekdb_stmt_execute(stmt);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "INSERT with VECTOR failed"};
+    }
+    seekdb_stmt_close(stmt);
+
+    SeekdbResult result = nullptr;
+    ret = seekdb_query(handle, "SELECT document, embedding FROM test_vector_read_no_round WHERE document = 'vec_no_round' LIMIT 1", &result);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "SELECT failed"};
+    }
+    result = seekdb_store_result(handle);
+    if (!result) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to store result"};
+    }
+    my_ulonglong row_count = seekdb_num_rows(result);
+    if (row_count != 1) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Expected 1 row"};
+    }
+    SeekdbRow row = seekdb_fetch_row(result);
+    if (!row) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Failed to fetch row"};
+    }
+    if (seekdb_row_is_null(row, 1)) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Embedding column is NULL"};
+    }
+    size_t embedding_len = seekdb_row_get_string_len(row, 1);
+    std::vector<char> emb_buf(embedding_len + 1, 0);
+    ret = seekdb_row_get_string(row, 1, emb_buf.data(), emb_buf.size());
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "seekdb_row_get_string failed"};
+    }
+    std::string emb_str(emb_buf.data(), embedding_len);
+    if (emb_str != "[1.1, 2.2, 3.3]") {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "VECTOR expected [1.1, 2.2, 3.3] (no rounding), got: " + emb_str};
+    }
+    seekdb_result_free(result);
+    execute_sql("DROP TABLE IF EXISTS test_vector_read_no_round");
     seekdb_connect_close(handle);
     return {true, ""};
 }
@@ -3678,6 +3911,8 @@ int main() {
         {"VECTOR Parameter Binding", test_vector_parameter_binding},
         {"Binary Parameter Binding", test_binary_parameter_binding},
         {"Embedded VARBINARY_ID Binding", test_embedded_varbinary_id_binding},
+        {"VECTOR Column Reading", test_vector_column_reading},
+        {"VECTOR Column Reading No Rounding", test_vector_column_reading_no_rounding},
         {"Column Name Inference", test_column_name_inference},
         
         // ========== 7. Prepared Statement ==========
