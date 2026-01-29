@@ -8,9 +8,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # unittest/include/nodejs_napi/ -> unittest/include/ -> unittest/ -> project root
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../" && pwd)"
 
-# Set library path
+# Set library path (Linux: .so, macOS: .dylib)
 SEEKDB_LIB_DIR="${PROJECT_ROOT}/build_release/src/include"
-export SEEKDB_LIB_PATH="${SEEKDB_LIB_DIR}/libseekdb.so"
+case "$(uname -s)" in
+    Darwin*) SEEKDB_LIB_EXT=".dylib" ;;
+    *)       SEEKDB_LIB_EXT=".so" ;;
+esac
+export SEEKDB_LIB_PATH="${SEEKDB_LIB_DIR}/libseekdb${SEEKDB_LIB_EXT}"
 
 echo "=== Testing Node.js N-API Binding ==="
 echo "SEEKDB_LIB_PATH: ${SEEKDB_LIB_PATH}"
@@ -18,7 +22,7 @@ echo ""
 
 # Check if seekdb library exists
 if [ ! -f "${SEEKDB_LIB_PATH}" ]; then
-    echo "Error: libseekdb.so not found at ${SEEKDB_LIB_PATH}"
+    echo "Error: libseekdb${SEEKDB_LIB_EXT} not found at ${SEEKDB_LIB_PATH}"
     echo "Please build the project first: cd ${PROJECT_ROOT}/build_release && make libseekdb"
     exit 1
 fi

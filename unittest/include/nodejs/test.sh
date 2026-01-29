@@ -3,17 +3,21 @@ set -e
 
 cd "$(dirname "$0")"
 
-# Set library path
+# Set library path (Linux: .so, macOS: .dylib)
 SEEKDB_LIB_DIR="$(cd ../../../build_release/src/include && pwd)"
-export SEEKDB_LIB_PATH="${SEEKDB_LIB_DIR}/libseekdb.so"
+case "$(uname -s)" in
+    Darwin*) SEEKDB_LIB_EXT=".dylib" ;;
+    *)       SEEKDB_LIB_EXT=".so" ;;
+esac
+export SEEKDB_LIB_PATH="${SEEKDB_LIB_DIR}/libseekdb${SEEKDB_LIB_EXT}"
 
 echo "=== Testing Node.js FFI Binding ==="
 echo "SEEKDB_LIB_PATH: $SEEKDB_LIB_PATH"
 echo ""
 
 # Check if seekdb library exists
-if [ ! -f "${SEEKDB_LIB_DIR}/libseekdb.so" ]; then
-    echo "Error: libseekdb.so not found at ${SEEKDB_LIB_DIR}/libseekdb.so"
+if [ ! -f "${SEEKDB_LIB_PATH}" ]; then
+    echo "Error: libseekdb${SEEKDB_LIB_EXT} not found at ${SEEKDB_LIB_PATH}"
     echo "Please build the project first: cd ../../../build_release && make libseekdb"
     exit 1
 fi

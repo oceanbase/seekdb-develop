@@ -47,6 +47,22 @@ target_include_directories(libseekdb
 # (macOS/clang does not support -static-libgcc/-static-libstdc++)
 # Use version script (Linux) / exported_symbols_list (macOS) to hide internal symbols
 if(APPLE)
+  # macOS: -exported_symbols_list does NOT support wildcards; generate list from seekdb.h
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/seekdb.h" SEEKDB_HEADER_CONTENT)
+  string(REGEX MATCHALL "seekdb_[a-zA-Z0-9_]+" SEEKDB_SYMBOLS "${SEEKDB_HEADER_CONTENT}")
+  list(REMOVE_DUPLICATES SEEKDB_SYMBOLS)
+  list(FILTER SEEKDB_SYMBOLS EXCLUDE REGEX "seekdb_cell_callback_t")
+  # Exclude false positives from comments (e.g. "seekdb_stmt_*" yields "seekdb_stmt_")
+  list(FILTER SEEKDB_SYMBOLS EXCLUDE REGEX "_$")
+  list(SORT SEEKDB_SYMBOLS)
+  set(SEEKDB_EXPORT_CONTENT "# Generated from seekdb.h - do not edit\n")
+  foreach(SYM ${SEEKDB_SYMBOLS})
+    # macOS C symbols have leading underscore in the symbol table
+    string(APPEND SEEKDB_EXPORT_CONTENT "_${SYM}\n")
+  endforeach()
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/seekdb_export.txt" "${SEEKDB_EXPORT_CONTENT}")
+  set(SEEKDB_EXPORT_FILE "${CMAKE_CURRENT_BINARY_DIR}/seekdb_export.txt")
+
   # macOS: use -force_load only for liboceanbase_static.a to avoid -all_load pulling in both
   # oblib (with its snappy/lz4) and deps/3rd liblz4.a/libsnappy.a, which causes 68 duplicate symbols.
   # Linking oceanbase_static without -all_load may yield undefined symbols; if so we need to revisit.
@@ -54,7 +70,7 @@ if(APPLE)
   target_link_libraries(libseekdb
     PRIVATE
       oceanbase_static
-      -Wl,-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/seekdb_export.txt
+      -Wl,-exported_symbols_list,${SEEKDB_EXPORT_FILE}
   )
 else()
   target_link_libraries(libseekdb

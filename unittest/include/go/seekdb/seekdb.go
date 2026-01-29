@@ -12,7 +12,9 @@ package seekdb
 
 /*
 #cgo CFLAGS: -I../../../../src/include
-#cgo LDFLAGS: -L${SRCDIR}/../../../../build_release/src/include -Wl,-rpath,${SRCDIR}/../../../../build_release/src/include -Wl,--allow-shlib-undefined -lseekdb
+#cgo linux LDFLAGS: -L${SRCDIR}/../../../../build_release/src/include -Wl,-rpath,${SRCDIR}/../../../../build_release/src/include -Wl,--allow-shlib-undefined -lseekdb
+#cgo darwin CFLAGS: -mmacosx-version-min=15.7
+#cgo darwin LDFLAGS: -L${SRCDIR}/../../../../build_release/src/include -Wl,-rpath,${SRCDIR}/../../../../build_release/src/include -lseekdb -mmacosx-version-min=15.7
 #include "seekdb.h"
 #include <stdlib.h>
 */
