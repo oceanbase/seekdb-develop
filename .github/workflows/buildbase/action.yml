@@ -25,6 +25,9 @@ runs:
         max-size: 800M
         save: ${{inputs.save_cache}}
         key: ${{inputs.os}}
+        # With append-timestamp (default true), saved key becomes os-<timestamp>; restore-keys enables prefix match on restore
+        restore-keys: |
+          ${{ inputs.os }}
 
     - name: Build project
       shell: bash
