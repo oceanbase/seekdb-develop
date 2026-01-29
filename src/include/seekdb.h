@@ -583,7 +583,8 @@ typedef enum {
     SEEKDB_TYPE_TIMESTAMP = 10,
     SEEKDB_TYPE_STRING = 11,
     SEEKDB_TYPE_BLOB = 12,
-    SEEKDB_TYPE_VECTOR = 13  // VECTOR type: input as JSON array '[1,2,3]', stored as binary (float array)
+    SEEKDB_TYPE_VECTOR = 13,  // VECTOR type: input as JSON array '[1,2,3]', stored as binary (float array)
+    SEEKDB_TYPE_VARBINARY_ID = 14  // VARBINARY(512) _id: right-pad/truncate to 512 bytes, output as 0x hex. Use for _id placeholders (no SQL parsing; semantics from bind type, like MySQL)
 } SeekdbFieldType;
 
 typedef struct {

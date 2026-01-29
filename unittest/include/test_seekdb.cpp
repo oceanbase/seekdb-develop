@@ -1103,6 +1103,308 @@ TestResult test_binary_parameter_binding() {
     return {true, ""};
 }
 
+// Embedded param binding: SEEKDB_TYPE_VARBINARY_ID for _id (collection-like)
+TestResult test_embedded_varbinary_id_binding() {
+    SeekdbHandle handle = nullptr;
+    int ret = seekdb_connect(&handle, "test", true);
+    if (ret != SEEKDB_SUCCESS) {
+        return {false, "Failed to connect"};
+    }
+    auto execute_sql = [&handle](const char* sql) -> int {
+        SeekdbResult result = nullptr;
+        int r = seekdb_query(handle, sql, &result);
+        if (result) seekdb_result_free(result);
+        return r;
+    };
+    const char* table = "test_embed_varbinary_id";
+    execute_sql((std::string("DROP TABLE IF EXISTS ") + table).c_str());
+    // _id VARBINARY(512) like collection table
+    ret = execute_sql(
+        "CREATE TABLE test_embed_varbinary_id (_id VARBINARY(512) PRIMARY KEY, document VARCHAR(1024), metadata VARCHAR(1024))");
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to create table"};
+    }
+    // 1) INSERT: VALUES (CAST(? AS BINARY), ?, ?) with [VARBINARY_ID, STRING, STRING]
+    SeekdbStmt stmt = seekdb_stmt_init(handle);
+    if (!stmt) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to init statement"};
+    }
+    const char* insert_sql = "INSERT INTO test_embed_varbinary_id (_id, document, metadata) VALUES (CAST(? AS BINARY), ?, ?)";
+    ret = seekdb_stmt_prepare(stmt, insert_sql, strlen(insert_sql));
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to prepare INSERT"};
+    }
+    const char* id1 = "emb_id_1";
+    const char* doc1 = "doc one";
+    const char* meta1 = "meta one";
+    unsigned long len_id1 = strlen(id1), len_doc1 = strlen(doc1), len_meta1 = strlen(meta1);
+    bool n1 = false;
+    SeekdbBind ins_binds[3];
+    ins_binds[0].buffer_type = SEEKDB_TYPE_VARBINARY_ID;
+    ins_binds[0].buffer = const_cast<char*>(id1);
+    ins_binds[0].buffer_length = len_id1;
+    ins_binds[0].length = &len_id1;
+    ins_binds[0].is_null = &n1;
+    ins_binds[1].buffer_type = SEEKDB_TYPE_STRING;
+    ins_binds[1].buffer = const_cast<char*>(doc1);
+    ins_binds[1].buffer_length = len_doc1;
+    ins_binds[1].length = &len_doc1;
+    ins_binds[1].is_null = &n1;
+    ins_binds[2].buffer_type = SEEKDB_TYPE_STRING;
+    ins_binds[2].buffer = const_cast<char*>(meta1);
+    ins_binds[2].buffer_length = len_meta1;
+    ins_binds[2].length = &len_meta1;
+    ins_binds[2].is_null = &n1;
+    ret = seekdb_stmt_bind_param(stmt, ins_binds);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to bind INSERT"};
+    }
+    ret = seekdb_stmt_execute(stmt);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "INSERT with VARBINARY_ID failed"};
+    }
+    seekdb_stmt_close(stmt);
+    // 2) SELECT WHERE _id = CAST(? AS BINARY) with VARBINARY_ID — expect 1 row, result non-null
+    stmt = seekdb_stmt_init(handle);
+    if (!stmt) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to init statement for SELECT"};
+    }
+    const char* select_one_sql = "SELECT _id, document, metadata FROM test_embed_varbinary_id WHERE _id = CAST(? AS BINARY)";
+    ret = seekdb_stmt_prepare(stmt, select_one_sql, strlen(select_one_sql));
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to prepare SELECT one"};
+    }
+    SeekdbBind sel_bind;
+    sel_bind.buffer_type = SEEKDB_TYPE_VARBINARY_ID;
+    sel_bind.buffer = const_cast<char*>(id1);
+    sel_bind.buffer_length = len_id1;
+    sel_bind.length = &len_id1;
+    sel_bind.is_null = &n1;
+    ret = seekdb_stmt_bind_param(stmt, &sel_bind);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to bind SELECT one"};
+    }
+    ret = seekdb_stmt_execute(stmt);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "SELECT with VARBINARY_ID execute failed"};
+    }
+    my_ulonglong row_count = seekdb_stmt_num_rows(stmt);
+    if (row_count != 1) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "SELECT by _id expected 1 row, got " + std::to_string(row_count)};
+    }
+    unsigned int field_count = seekdb_stmt_field_count(stmt);
+    if (field_count != 3) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "SELECT expected 3 fields, got " + std::to_string(field_count)};
+    }
+    char buf0[512] = {0}, doc_buf[256] = {0}, buf2[256] = {0};
+    unsigned long len0 = 0, doc_len = 0, len2 = 0;
+    SeekdbBind res_binds[3];
+    res_binds[0].buffer_type = SEEKDB_TYPE_STRING;
+    res_binds[0].buffer = buf0;
+    res_binds[0].buffer_length = sizeof(buf0);
+    res_binds[0].length = &len0;
+    res_binds[0].is_null = &n1;
+    res_binds[1].buffer_type = SEEKDB_TYPE_STRING;
+    res_binds[1].buffer = doc_buf;
+    res_binds[1].buffer_length = sizeof(doc_buf);
+    res_binds[1].length = &doc_len;
+    res_binds[1].is_null = &n1;
+    res_binds[2].buffer_type = SEEKDB_TYPE_STRING;
+    res_binds[2].buffer = buf2;
+    res_binds[2].buffer_length = sizeof(buf2);
+    res_binds[2].length = &len2;
+    res_binds[2].is_null = &n1;
+    ret = seekdb_stmt_bind_result(stmt, res_binds);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to bind result"};
+    }
+    ret = seekdb_stmt_fetch(stmt);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to fetch row (result set should be non-null)"};
+    }
+    if (doc_len != len_doc1 || strncmp(doc_buf, doc1, doc_len) != 0) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Fetched document mismatch"};
+    }
+    seekdb_stmt_close(stmt);
+    // 3) INSERT second row, then get by multiple ids
+    stmt = seekdb_stmt_init(handle);
+    if (!stmt) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to init for second INSERT"};
+    }
+    ret = seekdb_stmt_prepare(stmt, insert_sql, strlen(insert_sql));
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to prepare second INSERT"};
+    }
+    const char* id2 = "emb_id_2";
+    const char* doc2 = "doc two";
+    const char* meta2 = "meta two";
+    unsigned long len_id2 = strlen(id2), len_doc2 = strlen(doc2), len_meta2 = strlen(meta2);
+    ins_binds[0].buffer = const_cast<char*>(id2);
+    ins_binds[0].length = &len_id2;
+    ins_binds[1].buffer = const_cast<char*>(doc2);
+    ins_binds[1].length = &len_doc2;
+    ins_binds[2].buffer = const_cast<char*>(meta2);
+    ins_binds[2].length = &len_meta2;
+    ret = seekdb_stmt_bind_param(stmt, ins_binds);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to bind second INSERT"};
+    }
+    ret = seekdb_stmt_execute(stmt);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Second INSERT failed"};
+    }
+    seekdb_stmt_close(stmt);
+    // 4) SELECT WHERE (_id = CAST(? AS BINARY) OR _id = CAST(? AS BINARY)) — expect 2 rows
+    stmt = seekdb_stmt_init(handle);
+    if (!stmt) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to init for SELECT multiple"};
+    }
+    const char* select_multi_sql = "SELECT _id, document FROM test_embed_varbinary_id WHERE (_id = CAST(? AS BINARY) OR _id = CAST(? AS BINARY))";
+    ret = seekdb_stmt_prepare(stmt, select_multi_sql, strlen(select_multi_sql));
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to prepare SELECT multiple"};
+    }
+    SeekdbBind multi_binds[2];
+    multi_binds[0].buffer_type = SEEKDB_TYPE_VARBINARY_ID;
+    multi_binds[0].buffer = const_cast<char*>(id1);
+    multi_binds[0].buffer_length = len_id1;
+    multi_binds[0].length = &len_id1;
+    multi_binds[0].is_null = &n1;
+    multi_binds[1].buffer_type = SEEKDB_TYPE_VARBINARY_ID;
+    multi_binds[1].buffer = const_cast<char*>(id2);
+    multi_binds[1].buffer_length = len_id2;
+    multi_binds[1].length = &len_id2;
+    multi_binds[1].is_null = &n1;
+    ret = seekdb_stmt_bind_param(stmt, multi_binds);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to bind SELECT multiple"};
+    }
+    ret = seekdb_stmt_execute(stmt);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "SELECT multiple execute failed"};
+    }
+    row_count = seekdb_stmt_num_rows(stmt);
+    if (row_count != 2) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "SELECT by multiple ids expected 2 rows, got " + std::to_string(row_count)};
+    }
+    seekdb_stmt_close(stmt);
+    // 5) UPDATE SET document = ? WHERE _id = CAST(? AS BINARY) — id last param VARBINARY_ID
+    stmt = seekdb_stmt_init(handle);
+    if (!stmt) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to init for UPDATE"};
+    }
+    const char* update_sql = "UPDATE test_embed_varbinary_id SET document = ? WHERE _id = CAST(? AS BINARY)";
+    ret = seekdb_stmt_prepare(stmt, update_sql, strlen(update_sql));
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to prepare UPDATE"};
+    }
+    const char* doc_updated = "doc one updated";
+    unsigned long len_doc_up = strlen(doc_updated);
+    SeekdbBind upd_binds[2];
+    upd_binds[0].buffer_type = SEEKDB_TYPE_STRING;
+    upd_binds[0].buffer = const_cast<char*>(doc_updated);
+    upd_binds[0].buffer_length = len_doc_up;
+    upd_binds[0].length = &len_doc_up;
+    upd_binds[0].is_null = &n1;
+    upd_binds[1].buffer_type = SEEKDB_TYPE_VARBINARY_ID;
+    upd_binds[1].buffer = const_cast<char*>(id1);
+    upd_binds[1].buffer_length = len_id1;
+    upd_binds[1].length = &len_id1;
+    upd_binds[1].is_null = &n1;
+    ret = seekdb_stmt_bind_param(stmt, upd_binds);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to bind UPDATE"};
+    }
+    ret = seekdb_stmt_execute(stmt);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "UPDATE with VARBINARY_ID failed"};
+    }
+    seekdb_stmt_close(stmt);
+    // 6) DELETE WHERE _id = CAST(? AS BINARY) with VARBINARY_ID
+    stmt = seekdb_stmt_init(handle);
+    if (!stmt) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to init for DELETE"};
+    }
+    const char* delete_sql = "DELETE FROM test_embed_varbinary_id WHERE _id = CAST(? AS BINARY)";
+    ret = seekdb_stmt_prepare(stmt, delete_sql, strlen(delete_sql));
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to prepare DELETE"};
+    }
+    SeekdbBind del_bind;
+    del_bind.buffer_type = SEEKDB_TYPE_VARBINARY_ID;
+    del_bind.buffer = const_cast<char*>(id2);
+    del_bind.buffer_length = len_id2;
+    del_bind.length = &len_id2;
+    del_bind.is_null = &n1;
+    ret = seekdb_stmt_bind_param(stmt, &del_bind);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "Failed to bind DELETE"};
+    }
+    ret = seekdb_stmt_execute(stmt);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_stmt_close(stmt);
+        seekdb_connect_close(handle);
+        return {false, "DELETE with VARBINARY_ID failed"};
+    }
+    seekdb_stmt_close(stmt);
+    execute_sql("DROP TABLE IF EXISTS test_embed_varbinary_id");
+    seekdb_connect_close(handle);
+    return {true, ""};
+}
+
 // Test column name inference (core feature)
 TestResult test_column_name_inference() {
     SeekdbHandle handle = nullptr;
@@ -3375,6 +3677,7 @@ int main() {
         {"Parameterized Queries", test_parameterized_queries},
         {"VECTOR Parameter Binding", test_vector_parameter_binding},
         {"Binary Parameter Binding", test_binary_parameter_binding},
+        {"Embedded VARBINARY_ID Binding", test_embedded_varbinary_id_binding},
         {"Column Name Inference", test_column_name_inference},
         
         // ========== 7. Prepared Statement ==========

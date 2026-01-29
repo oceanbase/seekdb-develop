@@ -247,6 +247,9 @@ struct SeekdbStmtData {
     }
 };
 
+// VARBINARY(512) length for _id column; semantics from bind type (SEEKDB_TYPE_VARBINARY_ID), no SQL parsing
+static const unsigned int VARBINARY_ID_LENGTH = 512;
+
 // Global state
 static std::mutex g_init_mutex;
 static bool g_initialized = false;
@@ -1952,6 +1955,27 @@ static std::string bind_to_string_value(SeekdbHandle handle, const SeekdbBind& b
                 }
             }
             break;
+        case SEEKDB_TYPE_VARBINARY_ID:
+            if (bind.buffer && bind.length) {
+                size_t data_len = *bind.length;
+                size_t copy_len = (data_len > VARBINARY_ID_LENGTH) ? VARBINARY_ID_LENGTH : data_len;
+                std::vector<char> padded(VARBINARY_ID_LENGTH, 0);
+                if (copy_len > 0) {
+                    memcpy(padded.data(), bind.buffer, copy_len);
+                }
+                size_t hex_len = VARBINARY_ID_LENGTH * 2 + 1;
+                std::vector<char> hex_buf(hex_len);
+                unsigned long hex_length = seekdb_hex_string(
+                    hex_buf.data(),
+                    static_cast<unsigned long>(hex_len),
+                    padded.data(),
+                    VARBINARY_ID_LENGTH
+                );
+                if (hex_length != static_cast<unsigned long>(-1)) {
+                    return "0x" + std::string(hex_buf.data(), hex_length);
+                }
+            }
+            break;
         default:
             break;
     }
@@ -2196,15 +2220,15 @@ int seekdb_real_query_with_params(
     }
     
     // Execute statement
-    // Note: seekdb_stmt_execute() internally builds SQL with parameter substitution
-    // and calls seekdb_query(), which stores result in conn->last_result_set
+    // Note: seekdb_stmt_execute() builds SQL with parameter substitution, calls seekdb_query(),
+    // then transfers result from conn->last_result_set to stmt_data->result_set
     ret = seekdb_stmt_execute(stmt);
     
-    // Get result from connection (seekdb_stmt_execute stores it there via seekdb_query)
-    SeekdbConnection* conn = static_cast<SeekdbConnection*>(handle);
-    if (ret == SEEKDB_SUCCESS && conn && conn->last_result_set) {
-        *result = static_cast<SeekdbResult>(conn->last_result_set);
-        conn->last_result_set = nullptr; // Transfer ownership
+    // Get result from statement (seekdb_stmt_execute stores it in stmt_data->result_set, not conn)
+    SeekdbStmtData* stmt_data = static_cast<SeekdbStmtData*>(stmt);
+    if (ret == SEEKDB_SUCCESS && stmt_data && stmt_data->result_set) {
+        *result = static_cast<SeekdbResult>(stmt_data->result_set);
+        stmt_data->result_set = nullptr;  // Transfer ownership to caller; stmt_close must not free it
     }
     
     // Close statement
@@ -3926,11 +3950,9 @@ int seekdb_stmt_execute(SeekdbStmt stmt) {
         return SEEKDB_ERROR_NOT_INITIALIZED;
     }
     
-    // Build SQL with parameter substitution
-    // Note: This implementation uses string substitution (not true prepared statements)
-    // Parameter format is determined by buffer_type, aligned with MySQL C API:
-    // - SEEKDB_TYPE_BLOB: hexadecimal format (0x...) for binary data
-    // - SEEKDB_TYPE_STRING: quoted string format ('...') for text data
+    // Build SQL with parameter substitution (no SQL parsing; format from bind type, like MySQL binary protocol)
+    // - SEEKDB_TYPE_BLOB: hex (0x...); SEEKDB_TYPE_STRING: quoted '...'
+    // - SEEKDB_TYPE_VARBINARY_ID: _id placeholder, right-pad/truncate to 512 bytes then hex (caller sets type)
     std::string final_sql = stmt_data->sql;
     size_t param_idx = 0;
     
@@ -4011,6 +4033,32 @@ int seekdb_stmt_execute(SeekdbStmt stmt) {
                                 *bind.length
                             );
                             
+                            if (hex_length != static_cast<unsigned long>(-1)) {
+                                param_value = "0x" + std::string(hex_buf.data(), hex_length);
+                            } else {
+                                param_value = "NULL";
+                            }
+                        } else {
+                            param_value = "NULL";
+                        }
+                        break;
+                    case SEEKDB_TYPE_VARBINARY_ID:
+                        // VARBINARY(512) _id: right-pad or truncate to 512 bytes, output as 0x hex (no SQL parsing)
+                        if (bind.buffer && bind.length) {
+                            size_t data_len = *bind.length;
+                            size_t copy_len = (data_len > VARBINARY_ID_LENGTH) ? VARBINARY_ID_LENGTH : data_len;
+                            std::vector<char> padded(VARBINARY_ID_LENGTH, 0);
+                            if (copy_len > 0) {
+                                memcpy(padded.data(), bind.buffer, copy_len);
+                            }
+                            size_t hex_len = VARBINARY_ID_LENGTH * 2 + 1;
+                            std::vector<char> hex_buf(hex_len);
+                            unsigned long hex_length = seekdb_hex_string(
+                                hex_buf.data(),
+                                static_cast<unsigned long>(hex_len),
+                                padded.data(),
+                                VARBINARY_ID_LENGTH
+                            );
                             if (hex_length != static_cast<unsigned long>(-1)) {
                                 param_value = "0x" + std::string(hex_buf.data(), hex_length);
                             } else {
@@ -4681,6 +4729,7 @@ SeekdbResult seekdb_stmt_param_metadata(SeekdbStmt stmt) {
                     param_type = oceanbase::common::ObDoubleType;
                     break;
                 case SEEKDB_TYPE_STRING:
+                case SEEKDB_TYPE_VARBINARY_ID:
                     param_type = oceanbase::common::ObVarcharType;
                     break;
                 case SEEKDB_TYPE_VECTOR:
