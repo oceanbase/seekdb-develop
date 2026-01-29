@@ -245,26 +245,6 @@ bool seekdb_row_is_null(SeekdbRow row, int32_t column_index);
 void seekdb_result_free(SeekdbResult result);
 
 /**
- * Copy current row data into caller-owned allocations.
- * Use when row data must outlive the next seekdb_fetch_row() or seekdb_result_free().
- * @param row Row handle from seekdb_fetch_row()
- * @param row_values Output array of char* (one per column; NULL for NULL values); caller must free with seekdb_free_row_copy()
- * @param column_count Output number of columns
- * @return SEEKDB_SUCCESS on success, error code otherwise
- * @note MySQL C API has no equivalent function: mysql_fetch_row() returns borrowed MYSQL_ROW;
- *       to keep data you must copy yourself (mysql_fetch_lengths() + memcpy/strdup).
- *       This function provides the same semantics (caller-owned copy, must free) as a convenience.
- */
-int seekdb_fetch_row_copy(SeekdbRow row, char*** row_values, uint32_t* column_count);
-
-/**
- * Free row copy from seekdb_fetch_row_copy()
- * @param row_values Array returned by seekdb_fetch_row_copy()
- * @param column_count Number of columns
- */
-void seekdb_free_row_copy(char** row_values, uint32_t column_count);
-
-/**
  * Get the lengths of the columns in the current row
  * This is useful for distinguishing between empty strings and NULL values
  * @param result Result handle
@@ -273,15 +253,6 @@ void seekdb_free_row_copy(char** row_values, uint32_t column_count);
  * @note Caller should not free the returned array
  */
 unsigned long* seekdb_fetch_lengths(SeekdbResult result);
-
-/**
- * Copy current row column lengths into caller buffer.
- * @param result Result handle (current row is the last row from seekdb_fetch_row())
- * @param lengths Output buffer for lengths (at least column_count elements)
- * @param count Number of elements to copy (typically seekdb_num_fields(result))
- * @return SEEKDB_SUCCESS on success, error code otherwise
- */
-int seekdb_fetch_lengths_into(SeekdbResult result, unsigned long* lengths, uint32_t count);
 
 /**
  * Get the last error message (thread-local, no handle required)
@@ -304,23 +275,6 @@ int seekdb_last_error_code(void);
  * @note The returned string is valid until the next API call
  */
 const char* seekdb_error(SeekdbHandle handle);
-
-/**
- * Copy last error message into caller buffer (thread-local).
- * @param buf Output buffer
- * @param buf_len Buffer size
- * @return SEEKDB_SUCCESS on success, error code otherwise
- */
-int seekdb_last_error_copy(char* buf, size_t buf_len);
-
-/**
- * Copy connection error message into caller buffer.
- * @param handle Connection handle
- * @param buf Output buffer
- * @param buf_len Buffer size
- * @return SEEKDB_SUCCESS on success, error code otherwise
- */
-int seekdb_error_copy(SeekdbHandle handle, char* buf, size_t buf_len);
 
 /**
  * Get the last error code
