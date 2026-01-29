@@ -46,7 +46,6 @@ const seekdb_row_get_double = lib.func('seekdb_row_get_double', 'int', ['void*',
 const seekdb_row_get_bool = lib.func('seekdb_row_get_bool', 'int', ['void*', 'int32', outBool]);
 const seekdb_row_is_null = lib.func('seekdb_row_is_null', 'bool', ['void*', 'int32']);
 const seekdb_result_free = lib.func('seekdb_result_free', 'void', ['void*']);
-const seekdb_row_free = lib.func('seekdb_row_free', 'void', ['void*']);
 const seekdb_error = lib.func('seekdb_error', 'str', ['void*']);
 const seekdb_errno = lib.func('seekdb_errno', 'uint32', ['void*']);
 const seekdb_last_error = lib.func('seekdb_last_error', 'str', []);
@@ -227,8 +226,6 @@ class SeekdbResult {
             }
 
             rows.push(row);
-            // Free row handle immediately after use
-            seekdb_row_free(rowHandle);
         }
 
         return rows;

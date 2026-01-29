@@ -48,7 +48,6 @@ extern "C" {
     fn seekdb_row_get_bool(row: *mut c_void, column_index: i32, value: *mut bool) -> c_int;
     fn seekdb_row_is_null(row: *mut c_void, column_index: i32) -> bool;
     fn seekdb_result_free(result: *mut c_void);
-    fn seekdb_row_free(row: *mut c_void);
     fn seekdb_error(handle: *mut c_void) -> *const c_char;
     fn seekdb_affected_rows(handle: *mut c_void) -> u64;
 }
@@ -304,9 +303,6 @@ impl SeekdbResult {
                 }
             }
             rows.push(row);
-            unsafe {
-                seekdb_row_free(row_ptr);
-            }
         }
 
         rows

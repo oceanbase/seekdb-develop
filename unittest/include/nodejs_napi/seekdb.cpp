@@ -265,7 +265,6 @@ Napi::Value SeekdbQuery(const Napi::CallbackInfo& info) {
       }
       
       rows.Set(i, row_obj);
-      seekdb_row_free(row);
     }
   }
   result_obj.Set("rows", rows);

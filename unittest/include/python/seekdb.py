@@ -63,18 +63,7 @@ class SeekdbRow:
         self._row_ptr = row_ptr
         self._column_count = column_count
         self._column_names = column_names
-        self._freed = False
-    
-    def __del__(self):
-        self.free()
-    
-    def free(self):
-        """Free the row handle."""
-        if not self._freed and self._row_ptr:
-            self._lib.seekdb_row_free(self._row_ptr)
-            self._freed = True
-            self._row_ptr = None  # Clear pointer to prevent double free
-    
+
     def is_null(self, column_index: int) -> bool:
         """Check if a column value is NULL."""
         return self._lib.seekdb_row_is_null(self._row_ptr, column_index)
@@ -227,7 +216,6 @@ class SeekdbResult:
             if row is None:
                 break
             rows.append(row.as_dict())
-            row.free()
         return rows
     
     def __iter__(self) -> Iterator[SeekdbRow]:
@@ -237,7 +225,6 @@ class SeekdbResult:
             if row is None:
                 break
             yield row
-            row.free()
 
 
 class SeekdbConnection:
@@ -475,10 +462,6 @@ class Seekdb:
         # void seekdb_result_free(SeekdbResult result)
         lib.seekdb_result_free.argtypes = [c_void_p]
         lib.seekdb_result_free.restype = None
-        
-        # void seekdb_row_free(SeekdbRow row)
-        lib.seekdb_row_free.argtypes = [c_void_p]
-        lib.seekdb_row_free.restype = None
         
         # const char* seekdb_error(SeekdbHandle handle)
         lib.seekdb_error.argtypes = [c_void_p]

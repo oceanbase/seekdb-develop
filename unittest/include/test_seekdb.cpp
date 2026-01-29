@@ -128,7 +128,6 @@ TestResult test_result_operations() {
         return {false, "Failed to fetch row"};
     }
     
-    seekdb_row_free(row);
     seekdb_result_free(result);
     seekdb_connect_close(handle);
     return {true, ""};
@@ -1374,14 +1373,12 @@ TestResult test_vector_parameter_binding() {
         seekdb_row_get_string(row, 0, count_str, sizeof(count_str));
         int count = std::atoi(count_str);
         if (count != 5) {
-            seekdb_row_free(row);
             seekdb_result_free(result);
             seekdb_connect_close(handle);
             return {false, std::string("Expected 5 rows inserted, got ") + count_str};
         }
     }
     
-    seekdb_row_free(row);
     seekdb_result_free(result);
     
     // Verify specific data by querying rows using document column
@@ -1417,7 +1414,6 @@ TestResult test_vector_parameter_binding() {
     if (doc_len > 0 && doc_len < sizeof(doc_buf)) {
         seekdb_row_get_string(row, 0, doc_buf, sizeof(doc_buf));
         if (strcmp(doc_buf, "Document 1") != 0) {
-            seekdb_row_free(row);
             seekdb_result_free(result);
             seekdb_connect_close(handle);
             return {false, std::string("Document mismatch: expected 'Document 1', got '") + doc_buf + "'"};
@@ -1430,7 +1426,6 @@ TestResult test_vector_parameter_binding() {
     // The important thing is that it's not NULL, which means the parameter binding worked
     size_t embedding_len = seekdb_row_get_string_len(row, 1);
     if (embedding_len == 0) {
-        seekdb_row_free(row);
         seekdb_result_free(result);
         seekdb_connect_close(handle);
         return {false, "Embedding column is NULL - VECTOR parameter binding failed"};
@@ -1442,7 +1437,6 @@ TestResult test_vector_parameter_binding() {
     // - Query return: Typically binary format via seekdb_row_get_string()
     //   (may contain non-printable characters, use errors='replace' when decoding as UTF-8)
     
-    seekdb_row_free(row);
     seekdb_result_free(result);
     
     // Test 2: Auto-detection via seekdb_query_with_params
@@ -1527,7 +1521,6 @@ TestResult test_vector_parameter_binding() {
         seekdb_row_get_string(count_row, 0, auto_count_str, sizeof(auto_count_str));
         int auto_count = std::atoi(auto_count_str);
         if (auto_count != 6) {
-            seekdb_row_free(count_row);
             seekdb_result_free(count_result);
             execute_sql("DROP TABLE IF EXISTS test_vector_params");
             seekdb_connect_close(handle);
@@ -1535,7 +1528,6 @@ TestResult test_vector_parameter_binding() {
         }
     }
     
-    seekdb_row_free(count_row);
     seekdb_result_free(count_result);
     
     // Verify auto-detection row
@@ -1565,14 +1557,12 @@ TestResult test_vector_parameter_binding() {
     // Verify embedding column is not null (proves auto-detection worked)
     size_t auto_embedding_len = seekdb_row_get_string_len(verify_row, 1);
     if (auto_embedding_len == 0) {
-        seekdb_row_free(verify_row);
         seekdb_result_free(verify_result);
         execute_sql("DROP TABLE IF EXISTS test_vector_params");
         seekdb_connect_close(handle);
         return {false, "Embedding column is NULL - auto-detection failed"};
     }
     
-    seekdb_row_free(verify_row);
     seekdb_result_free(verify_result);
     
     // Clean up
@@ -1688,7 +1678,6 @@ TestResult test_row_lengths() {
     // Test seekdb_row_get_string_len()
     size_t msg_len = seekdb_row_get_string_len(row, 0);
     if (msg_len != 5) {
-        seekdb_row_free(row);
         seekdb_result_free(result);
         seekdb_connect_close(handle);
         return {false, "Expected msg length 5"};
@@ -1697,20 +1686,17 @@ TestResult test_row_lengths() {
     // Test seekdb_fetch_lengths()
     unsigned long* lengths = seekdb_fetch_lengths(result);
     if (lengths == nullptr) {
-        seekdb_row_free(row);
         seekdb_result_free(result);
         seekdb_connect_close(handle);
         return {false, "Failed to get lengths"};
     }
     
     if (lengths[0] != 5) {
-        seekdb_row_free(row);
         seekdb_result_free(result);
         seekdb_connect_close(handle);
         return {false, "Expected first column length 5"};
     }
     
-    seekdb_row_free(row);
     seekdb_result_free(result);
     seekdb_connect_close(handle);
     return {true, ""};
@@ -1746,7 +1732,6 @@ TestResult test_row_is_null() {
     
     // Test non-NULL value
     if (seekdb_row_is_null(row, 0)) {
-        seekdb_row_free(row);
         seekdb_result_free(result);
         seekdb_connect_close(handle);
         return {false, "First column should not be NULL"};
@@ -1754,7 +1739,6 @@ TestResult test_row_is_null() {
     
     // Test NULL value
     if (!seekdb_row_is_null(row, 1)) {
-        seekdb_row_free(row);
         seekdb_result_free(result);
         seekdb_connect_close(handle);
         return {false, "Second column should be NULL"};
@@ -1762,13 +1746,11 @@ TestResult test_row_is_null() {
     
     // Test non-NULL value
     if (seekdb_row_is_null(row, 2)) {
-        seekdb_row_free(row);
         seekdb_result_free(result);
         seekdb_connect_close(handle);
         return {false, "Third column should not be NULL"};
     }
     
-    seekdb_row_free(row);
     seekdb_result_free(result);
     seekdb_connect_close(handle);
     return {true, ""};
@@ -2114,7 +2096,6 @@ TestResult test_stmt_reset() {
         seekdb_row_get_string(row, 0, count_str, sizeof(count_str));
         int count = std::atoi(count_str);
         if (count != 2) {
-            seekdb_row_free(row);
             seekdb_result_free(result);
             seekdb_stmt_close(stmt);
             seekdb_connect_close(handle);
@@ -2122,7 +2103,6 @@ TestResult test_stmt_reset() {
         }
     }
     
-    seekdb_row_free(row);
     seekdb_result_free(result);
     seekdb_stmt_close(stmt);
     
@@ -2183,7 +2163,6 @@ TestResult test_data_seek_and_field_seek() {
         return {false, "Failed to fetch row after data_seek"};
     }
     
-    seekdb_row_free(row);
     seekdb_result_free(result);
     seekdb_connect_close(handle);
     return {true, ""};
@@ -2360,7 +2339,6 @@ TestResult test_row_get_types() {
     int64_t int_val = 0;
     ret = seekdb_row_get_int64(row, 0, &int_val);
     if (ret != SEEKDB_SUCCESS || int_val != 123) {
-        seekdb_row_free(row);
         seekdb_result_free(result);
         seekdb_connect_close(handle);
         return {false, "Failed to get int64 value"};
@@ -2370,7 +2348,6 @@ TestResult test_row_get_types() {
     double double_val = 0.0;
     ret = seekdb_row_get_double(row, 1, &double_val);
     if (ret != SEEKDB_SUCCESS || double_val < 3.13 || double_val > 3.15) {
-        seekdb_row_free(row);
         seekdb_result_free(result);
         seekdb_connect_close(handle);
         return {false, "Failed to get double value"};
@@ -2380,13 +2357,11 @@ TestResult test_row_get_types() {
     bool bool_val = false;
     ret = seekdb_row_get_bool(row, 2, &bool_val);
     if (ret != SEEKDB_SUCCESS || bool_val != true) {
-        seekdb_row_free(row);
         seekdb_result_free(result);
         seekdb_connect_close(handle);
         return {false, "Failed to get bool value"};
     }
     
-    seekdb_row_free(row);
     seekdb_result_free(result);
     seekdb_connect_close(handle);
     return {true, ""};
@@ -3015,7 +2990,6 @@ TestResult test_field_and_row_tell() {
     my_ulonglong row_pos = seekdb_row_tell(result);
     // row_pos can be 0 or 1 depending on implementation
     
-    seekdb_row_free(row);
     seekdb_result_free(result);
     seekdb_connect_close(handle);
     return {true, ""};
@@ -3056,7 +3030,6 @@ TestResult test_row_seek() {
     // Fetch second row
     SeekdbRow row2 = seekdb_fetch_row(result);
     if (row2 == nullptr) {
-        seekdb_row_free(row1);
         seekdb_result_free(result);
         seekdb_connect_close(handle);
         return {false, "Failed to fetch second row"};
@@ -3066,15 +3039,11 @@ TestResult test_row_seek() {
     // Note: row_seek uses the row handle, not position
     SeekdbRow seeked_row = seekdb_row_seek(result, row1);
     if (seeked_row == nullptr) {
-        seekdb_row_free(row1);
-        seekdb_row_free(row2);
         seekdb_result_free(result);
         seekdb_connect_close(handle);
         return {false, "Failed to seek row"};
     }
     
-    seekdb_row_free(row1);
-    seekdb_row_free(row2);
     seekdb_result_free(result);
     seekdb_connect_close(handle);
     return {true, ""};

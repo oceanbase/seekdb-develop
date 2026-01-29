@@ -232,7 +232,6 @@ func (r *Result) FetchAll() [][]string {
 			}
 		}
 		rows = append(rows, row)
-		C.seekdb_row_free(rowPtr)
 	}
 
 	return rows

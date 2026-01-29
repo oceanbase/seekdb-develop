@@ -46,6 +46,9 @@ typedef unsigned __int64 my_ulonglong;
 #define SEEKDB_ERROR_MEMORY_ALLOC -4
 #define SEEKDB_ERROR_NOT_INITIALIZED -5
 
+/* Prepared statement fetch result (aligned with MySQL mysql_stmt_fetch) */
+#define SEEKDB_NO_DATA 100  /* No more rows; same as MYSQL_NO_DATA */
+
 /* Opaque handle types */
 typedef void* SeekdbHandle;
 typedef void* SeekdbResult;
@@ -81,6 +84,8 @@ void seekdb_close(void);
  * @param database Database name
  * @param autocommit Autocommit mode (default: false)
  * @return SEEKDB_SUCCESS on success, error code otherwise
+ * @note Concurrent use of the same connection from multiple threads is not guaranteed thread-safe;
+ *       use one connection per thread or serialize access.
  */
 int seekdb_connect(SeekdbHandle* handle, const char* database, bool autocommit);
 
@@ -172,8 +177,11 @@ int seekdb_result_column_name(SeekdbResult result, int32_t column_index, char* n
 
 /**
  * Fetch the next row from result set
+ * Aligned with MySQL: returned row is valid until next seekdb_fetch_row() or seekdb_result_free().
  * @param result Result handle
  * @return SeekdbRow handle if row fetched, NULL if no more rows or error
+ * @note When result was obtained via seekdb_use_result(), NULL may mean end of data or error;
+ *       use seekdb_errno(handle) or seekdb_error(handle) to distinguish (non-zero = error).
  */
 SeekdbRow seekdb_fetch_row(SeekdbResult result);
 
@@ -237,10 +245,24 @@ bool seekdb_row_is_null(SeekdbRow row, int32_t column_index);
 void seekdb_result_free(SeekdbResult result);
 
 /**
- * Free a row handle
- * @param row Row handle to free
+ * Copy current row data into caller-owned allocations.
+ * Use when row data must outlive the next seekdb_fetch_row() or seekdb_result_free().
+ * @param row Row handle from seekdb_fetch_row()
+ * @param row_values Output array of char* (one per column; NULL for NULL values); caller must free with seekdb_free_row_copy()
+ * @param column_count Output number of columns
+ * @return SEEKDB_SUCCESS on success, error code otherwise
+ * @note MySQL C API has no equivalent function: mysql_fetch_row() returns borrowed MYSQL_ROW;
+ *       to keep data you must copy yourself (mysql_fetch_lengths() + memcpy/strdup).
+ *       This function provides the same semantics (caller-owned copy, must free) as a convenience.
  */
-void seekdb_row_free(SeekdbRow row);
+int seekdb_fetch_row_copy(SeekdbRow row, char*** row_values, uint32_t* column_count);
+
+/**
+ * Free row copy from seekdb_fetch_row_copy()
+ * @param row_values Array returned by seekdb_fetch_row_copy()
+ * @param column_count Number of columns
+ */
+void seekdb_free_row_copy(char** row_values, uint32_t column_count);
 
 /**
  * Get the lengths of the columns in the current row
@@ -251,6 +273,15 @@ void seekdb_row_free(SeekdbRow row);
  * @note Caller should not free the returned array
  */
 unsigned long* seekdb_fetch_lengths(SeekdbResult result);
+
+/**
+ * Copy current row column lengths into caller buffer.
+ * @param result Result handle (current row is the last row from seekdb_fetch_row())
+ * @param lengths Output buffer for lengths (at least column_count elements)
+ * @param count Number of elements to copy (typically seekdb_num_fields(result))
+ * @return SEEKDB_SUCCESS on success, error code otherwise
+ */
+int seekdb_fetch_lengths_into(SeekdbResult result, unsigned long* lengths, uint32_t count);
 
 /**
  * Get the last error message (thread-local, no handle required)
@@ -273,6 +304,23 @@ int seekdb_last_error_code(void);
  * @note The returned string is valid until the next API call
  */
 const char* seekdb_error(SeekdbHandle handle);
+
+/**
+ * Copy last error message into caller buffer (thread-local).
+ * @param buf Output buffer
+ * @param buf_len Buffer size
+ * @return SEEKDB_SUCCESS on success, error code otherwise
+ */
+int seekdb_last_error_copy(char* buf, size_t buf_len);
+
+/**
+ * Copy connection error message into caller buffer.
+ * @param handle Connection handle
+ * @param buf Output buffer
+ * @param buf_len Buffer size
+ * @return SEEKDB_SUCCESS on success, error code otherwise
+ */
+int seekdb_error_copy(SeekdbHandle handle, char* buf, size_t buf_len);
 
 /**
  * Get the last error code
@@ -632,15 +680,18 @@ int seekdb_stmt_bind_result(SeekdbStmt stmt, SeekdbBind* bind);
 
 /**
  * Fetch the next row from a prepared statement result set
+ * Aligned with MySQL mysql_stmt_fetch() return values.
  * @param stmt Prepared statement handle
- * @return 0 on success, 1 if no more rows, error code otherwise
+ * @return 0 on success, SEEKDB_NO_DATA if no more rows, 1 or SEEKDB_ERROR_* on error
  */
 int seekdb_stmt_fetch(SeekdbStmt stmt);
 
 /**
  * Get result set metadata for a prepared statement
+ * Aligned with MySQL: mysql_stmt_result_metadata() returns MYSQL_RES that caller must mysql_free_result().
  * @param stmt Prepared statement handle
- * @return Result handle with metadata, or NULL on error
+ * @return Result handle with metadata (caller-owned), or NULL on error
+ * @note Caller must call seekdb_result_free() on the returned result when done.
  */
 SeekdbResult seekdb_stmt_result_metadata(SeekdbStmt stmt);
 

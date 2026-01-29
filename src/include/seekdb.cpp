@@ -2380,22 +2380,18 @@ SeekdbRow seekdb_fetch_row(SeekdbResult result) {
         return nullptr; // No more rows (MySQL-compatible: returns NULL)
     }
     
-    // Free previous row data if exists and not already freed
-    // Note: seekdb_row_free() should have already freed it, but we check to be safe
-    if (rs->current_row_data) {
-        // Check if already freed to prevent double free
-        if (!rs->current_row_data->freed) {
-            delete rs->current_row_data;
-        }
-        rs->current_row_data = nullptr;
-    }
-    
-    SeekdbRowData* row_data = new (std::nothrow) SeekdbRowData(rs, rs->current_row);
+    // Align with MySQL: row is borrowed, valid until next seekdb_fetch_row() or seekdb_result_free().
+    // Reuse a single current_row_data instead of allocating per row.
+    SeekdbRowData* row_data = rs->current_row_data;
     if (!row_data) {
-        return nullptr;
+        row_data = new (std::nothrow) SeekdbRowData(rs, rs->current_row);
+        if (!row_data) {
+            return nullptr;
+        }
+        rs->current_row_data = row_data;
+    } else {
+        row_data->row_index = rs->current_row;
     }
-    
-    rs->current_row_data = row_data;
     
     // Pre-compute lengths for seekdb_fetch_lengths()
     rs->current_lengths.clear();
@@ -2634,24 +2630,6 @@ void seekdb_result_free(SeekdbResult result) {
     }
     
     delete rs;
-}
-
-void seekdb_row_free(SeekdbRow row) {
-    if (row) {
-        SeekdbRowData* row_data = static_cast<SeekdbRowData*>(row);
-        // Check if already freed to prevent double free
-        if (row_data->freed) {
-            return;  // Already freed, ignore
-        }
-        row_data->freed = true;
-        
-        SeekdbResultSet* rs = row_data->result_set;
-        // Clear the reference in result set to prevent double free
-        if (rs && rs->current_row_data == row_data) {
-            rs->current_row_data = nullptr;
-        }
-        delete row_data;
-    }
 }
 
 const char* seekdb_last_error(void) {
@@ -2925,9 +2903,7 @@ my_ulonglong seekdb_insert_id(SeekdbHandle handle) {
         if (seekdb_row_get_int64(row, 0, &id_value) == SEEKDB_SUCCESS) {
             insert_id = static_cast<my_ulonglong>(id_value);
         }
-        seekdb_row_free(row);
     }
-    
     seekdb_result_free(result);
     return insert_id;
 }
@@ -2979,7 +2955,6 @@ const char* seekdb_get_server_info(SeekdbHandle handle) {
         if (seekdb_row_get_string(row, 0, buf, sizeof(buf)) == SEEKDB_SUCCESS) {
             g_server_version = std::string(buf);
         }
-        seekdb_row_free(row);
     }
     seekdb_result_free(result);
     return g_server_version.c_str();
@@ -4595,15 +4570,15 @@ SeekdbRow seekdb_stmt_row_tell(SeekdbStmt stmt) {
         return nullptr;
     }
     
-    // Create or return existing row handle for current position
-    if (!rs->current_row_data || rs->current_row_data->row_index != current_pos) {
-        if (rs->current_row_data) {
-            delete rs->current_row_data;
-        }
-        rs->current_row_data = new SeekdbRowData(rs, current_pos);
+    // Reuse a single current_row_data (row is borrowed until next fetch or result_free).
+    SeekdbRowData* row_data = rs->current_row_data;
+    if (!row_data) {
+        row_data = new SeekdbRowData(rs, current_pos);
+        rs->current_row_data = row_data;
+    } else {
+        row_data->row_index = current_pos;
     }
-    
-    return static_cast<SeekdbRow>(rs->current_row_data);
+    return static_cast<SeekdbRow>(row_data);
 }
 
 int seekdb_stmt_fetch_column(SeekdbStmt stmt, SeekdbBind* bind, unsigned int column_index, unsigned long offset) {
