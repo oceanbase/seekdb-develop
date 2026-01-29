@@ -14,7 +14,7 @@ echo ""
 # Check if seekdb library exists
 if [ ! -f "${SEEKDB_LIB_DIR}/libseekdb.so" ]; then
     echo "Error: libseekdb.so not found at ${SEEKDB_LIB_DIR}/libseekdb.so"
-    echo "Please build the project first: cd ../../../build_release && make seekdb"
+    echo "Please build the project first: cd ../../../build_release && make libseekdb"
     exit 1
 fi
 
