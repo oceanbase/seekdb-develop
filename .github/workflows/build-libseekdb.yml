@@ -129,6 +129,20 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: package/libseekdb/libseekdb-*.zip
 
+      # Save caches even on failure so next run can resume (deps/ccache)
+      - name: Save Cache deps (Linux)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: deps/3rd
+          key: ${{ runner.os }}-libseekdb-deps-${{ matrix.platform }}-el7-${{ hashFiles('deps/init/oceanbase.el7.x86_64.deps', 'deps/init/oceanbase.el7.aarch64.deps') }}
+      - name: Save Cache ccache (Linux)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}-${{ hashFiles('cmake/Env.cmake', 'src/observer/CMakeLists.txt') }}
+
   # ---------- Build on macOS (no container) ----------
   build-macos:
     name: Build libseekdb (${{ matrix.platform }})
@@ -202,6 +216,20 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}
           path: package/libseekdb/libseekdb-*.zip
+
+      # Save caches even on failure so next run can resume (deps/ccache)
+      - name: Save Cache deps (macOS)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: deps/3rd
+          key: ${{ runner.os }}-libseekdb-deps-${{ matrix.platform }}-${{ hashFiles('deps/init/oceanbase.macos.arm64.deps') }}
+      - name: Save Cache ccache (macOS)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}-${{ hashFiles('cmake/Env.cmake', 'src/observer/CMakeLists.txt') }}
 
   # ---------- Collect libseekdb artifacts and upload to S3 ----------
   release-artifacts:
