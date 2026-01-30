@@ -3,10 +3,10 @@
 # Reference build environments (use these systems/env as the standard):
 #   linux-x64:   runner ubuntu-22.04, container quay.io/pypa/manylinux2014_x86_64 (glibc 2.17, CentOS 7+), zip libseekdb-linux-x64.zip
 #   linux-arm64: runner ubuntu-22.04-arm, container quay.io/pypa/manylinux2014_aarch64 (glibc 2.17), zip libseekdb-linux-arm64.zip
-#   darwin-x64:  runner macos-14, native (cross-build), zip libseekdb-darwin-x64.zip (min macOS 11.0)
-#   darwin-arm64: runner macos-14, native, zip libseekdb-darwin-arm64.zip (min macOS 11.0)
+#   darwin-x64:  runner macos-13, native (cross-build), zip libseekdb-darwin-x64.zip (min macOS 11.0)
+#   darwin-arm64: runner macos-13, native, zip libseekdb-darwin-arm64.zip (min macOS 11.0)
 #
-# macOS builds set CMAKE_OSX_DEPLOYMENT_TARGET=11.0 so the dylib runs on macOS 11+ (Big Sur and later).
+# macOS builds use runner macos-13 and set CMAKE_OSX_DEPLOYMENT_TARGET=11.0 so the dylib runs on macOS 11+ (Big Sur and later).
 # Artifacts: four platform zips; combined artifact libseekdb-all-platforms; optional S3 upload when DESTINATION_TARGET_PATH or AWS_S3_BUCKET and credentials are set.
 name: Build libseekdb
 run-name: Build libseekdb for ${{ github.sha }}
@@ -62,18 +62,9 @@ jobs:
             artifact_name: libseekdb-linux-arm64
             container_image: quay.io/pypa/manylinux2014_aarch64
 
-    container:
-      image: ${{ matrix.container_image }}
-      options: --user root
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install build dependencies (Linux, manylinux2014 / CentOS 7)
-        run: |
-          yum install -y git wget rpm cpio make glibc-devel glibc-headers binutils m4 python3 libtool libaio ncurses-devel which
-          yum install -y zlib-devel 2>/dev/null || true
 
       - name: Cache deps (Linux, el7)
         uses: actions/cache@v4
@@ -83,23 +74,27 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-libseekdb-deps-${{ matrix.platform }}-el7-
 
-      - name: Build init (Linux)
-        run: |
-          bash build.sh init
-          echo "$GITHUB_WORKSPACE/deps/3rd/usr/local/oceanbase/devtools/bin" >> $GITHUB_PATH
-
-      - name: Build libseekdb (Linux)
+      # Run build inside manylinux2014 so Node/actions run on host (glibc 2.28+), build runs in CentOS 7 (glibc 2.17) for compatibility
+      - name: Build libseekdb (Linux, manylinux2014)
         env:
           BUILD_TYPE: release
         run: |
-          PYVER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-          bash build.sh release --init --make -DOB_USE_CCACHE=ON -DBUILD_EMBED_MODE=ON -DPYTHON_VERSION=$PYVER
-          cd build_release && make -j$(nproc) libseekdb
-
-      - name: Pack libseekdb (Linux)
-        run: |
-          cd package/libseekdb && bash libseekdb-build.sh "$GITHUB_WORKSPACE/build_release/src/include"
-
+          docker run --rm -u root \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$GITHUB_WORKSPACE" \
+            -e BUILD_TYPE -e GITHUB_WORKSPACE \
+            ${{ matrix.container_image }} \
+            bash -c '
+              set -e
+              yum install -y git wget rpm cpio make glibc-devel glibc-headers binutils m4 python3 libtool libaio ncurses-devel which zlib-devel 2>/dev/null || true
+              export PATH="$GITHUB_WORKSPACE/deps/3rd/usr/local/oceanbase/devtools/bin:$PATH"
+              bash build.sh init
+              PYVER=$(python3 -c "import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")")
+              bash build.sh release --init --make -DOB_USE_CCACHE=ON -DBUILD_EMBED_MODE=ON -DPYTHON_VERSION=$PYVER
+              cd build_release && make -j$(nproc) libseekdb
+              cd package/libseekdb && bash libseekdb-build.sh "$GITHUB_WORKSPACE/build_release/src/include"
+            '
+      - name: Fix ownership (container writes as root)
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -115,12 +110,12 @@ jobs:
       matrix:
         include:
           - platform: darwin-x64
-            runner: macos-14
+            runner: macos-13
             artifact_name: libseekdb-darwin-x64
             arch: x86_64
             cmake_arch: x86_64
           - platform: darwin-arm64
-            runner: macos-14
+            runner: macos-13
             artifact_name: libseekdb-darwin-arm64
             arch: arm64
             cmake_arch: arm64
@@ -130,7 +125,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install macOS dependencies
-        run: brew install cmake dylibbundler || true
+        run: brew install cmake dylibbundler googletest || true
 
       - name: Cache deps (macOS)
         uses: actions/cache@v4
