@@ -119,7 +119,7 @@ jobs:
               fi
               bash build.sh release --init $USE_CCACHE -DBUILD_EMBED_MODE=ON -DPYTHON_VERSION=$PYVER
               cd build_release && make -j$(nproc) libseekdb
-              cd package/libseekdb && bash libseekdb-build.sh "$GITHUB_WORKSPACE/build_release/src/include"
+              cd "$GITHUB_WORKSPACE/package/libseekdb" && bash libseekdb-build.sh "$GITHUB_WORKSPACE/build_release/src/include"
             '
       - name: Fix ownership (container writes as root)
         run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"

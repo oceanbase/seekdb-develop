@@ -27,7 +27,8 @@ set(ZLIB_LITE_COMPILE_DEFINITIONS -fvisibility=hidden -Wno-deprecated-non-protot
 target_compile_options(zlib_lite_src PRIVATE ${ZLIB_LITE_COMPILE_DEFINITIONS})
 target_compile_options(zlib_lite_adaptor PRIVATE ${ZLIB_LITE_COMPILE_DEFINITIONS})
 
-if(${ARCHITECTURE} STREQUAL "x86_64")
+# QPL (Intel) is x86_64 Linux only; macOS deps do not ship qpl, so disable on APPLE (including darwin-x64 cross-build)
+if(${ARCHITECTURE} STREQUAL "x86_64" AND NOT APPLE)
   # We can not put the file codec_deflate_qpl.cpp into zlib_lite_objs.
   # I got some link error messages like below:
   # ld.lld: error: relocation refers to a symbol in a discarded section: __clang_call_terminate
@@ -42,7 +43,7 @@ if(${ARCHITECTURE} STREQUAL "x86_64")
 
   message(STATUS "zlib_lite use qpl")
 else()
-  # Keep a no-op target to avoid linking an empty static archive on non-x86_64.
+  # Keep a no-op target to avoid linking an empty static archive on non-x86_64 or macOS.
   add_library(zlib_lite_qpl INTERFACE)
   message(STATUS "zlib_lite use zlib compressor")
 endif()
