@@ -74,6 +74,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-libseekdb-deps-${{ matrix.platform }}-el7-
 
+      - name: Cache ccache (Linux)
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}-${{ hashFiles('cmake/Env.cmake', 'src/observer/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}-
+
       # Run build inside manylinux2014 so Node/actions run on host (glibc 2.28+), build runs in CentOS 7 (glibc 2.17) for compatibility
       - name: Build libseekdb (Linux, manylinux2014)
         env:
@@ -85,9 +93,10 @@ jobs:
             ${{ matrix.container_image }} \
             bash -c '
               set -e
-              yum install -y git wget rpm cpio make glibc-devel glibc-headers binutils m4 python3 libtool libaio ncurses-devel which zlib-devel 2>/dev/null || true
+              yum install -y git wget rpm cpio make glibc-devel glibc-headers binutils m4 python3 libtool libaio ncurses-devel which zlib-devel ccache 2>/dev/null || true
               git config --global --add safe.directory "$GITHUB_WORKSPACE"
               export PATH="$GITHUB_WORKSPACE/deps/3rd/usr/local/oceanbase/devtools/bin:$PATH"
+              export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
               bash build.sh init
               PYVER=$(python3 -c "import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")")
               bash build.sh release --init -DOB_USE_CCACHE=ON -DBUILD_EMBED_MODE=ON -DPYTHON_VERSION=$PYVER
@@ -136,6 +145,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-libseekdb-deps-${{ matrix.platform }}-
 
+      - name: Cache ccache (macOS)
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}-${{ hashFiles('cmake/Env.cmake', 'src/observer/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}-
+
       - name: Build init (macOS)
         run: bash build.sh init
 
@@ -144,6 +161,7 @@ jobs:
           BUILD_TYPE: release
           ARCH: ${{ matrix.arch }}
           CMAKE_OSX_ARCHITECTURES: ${{ matrix.cmake_arch }}
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
         run: |
           bash build.sh release --init -DOB_USE_CCACHE=ON -DBUILD_EMBED_MODE=ON -DCMAKE_OSX_ARCHITECTURES=${{ matrix.cmake_arch }} -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
           cd build_release && make -j$(sysctl -n hw.ncpu) libseekdb
