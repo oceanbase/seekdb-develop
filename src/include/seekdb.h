@@ -189,7 +189,8 @@ SeekdbRow seekdb_fetch_row(SeekdbResult result);
  * Get the length of a string value (without null terminator)
  * @param row Row handle
  * @param column_index Column index (0-based)
- * @return Length of string value, or (size_t)-1 on error
+ * @return For NULL column: (size_t)-1. For empty string '': 0. For non-empty: actual byte length.
+ *         Returns (size_t)-1 on invalid row/column index.
  */
 size_t seekdb_row_get_string_len(SeekdbRow row, int32_t column_index);
 
@@ -198,8 +199,8 @@ size_t seekdb_row_get_string_len(SeekdbRow row, int32_t column_index);
  * @param row Row handle
  * @param column_index Column index (0-based)
  * @param value Output buffer for value
- * @param value_len Buffer size
- * @return SEEKDB_SUCCESS on success, error code otherwise
+ * @param value_len Buffer size (must be >= seekdb_row_get_string_len()+1 for non-NULL to copy in full; no truncation)
+ * @return SEEKDB_SUCCESS on success. For NULL: writes '\\0' and succeeds. For non-NULL: returns error if value_len < len+1.
  */
 int seekdb_row_get_string(SeekdbRow row, int32_t column_index, char* value, size_t value_len);
 
@@ -234,7 +235,7 @@ int seekdb_row_get_bool(SeekdbRow row, int32_t column_index, bool* value);
  * Check if a value is NULL
  * @param row Row handle
  * @param column_index Column index (0-based)
- * @return true if NULL, false otherwise
+ * @return true only for SQL NULL; false for empty string '' and non-empty values (call seekdb_row_get_string_len for length)
  */
 bool seekdb_row_is_null(SeekdbRow row, int32_t column_index);
 

@@ -2291,6 +2291,306 @@ TestResult test_row_is_null() {
     return {true, ""};
 }
 
+// C ABI: NULL vs empty string must be distinguishable.
+TestResult test_null_vs_empty_string() {
+    SeekdbHandle handle = nullptr;
+    int ret = seekdb_connect(&handle, "test", true);
+    if (ret != SEEKDB_SUCCESS) {
+        return {false, "Failed to connect"};
+    }
+    SeekdbResult result = nullptr;
+    ret = seekdb_query(handle, "SELECT NULL AS a, '' AS b", &result);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to execute query"};
+    }
+    result = seekdb_store_result(handle);
+    if (result == nullptr) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to store result"};
+    }
+    SeekdbRow row = seekdb_fetch_row(result);
+    if (row == nullptr) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Failed to fetch row"};
+    }
+    // Column 0: SQL NULL -> row_is_null true, get_string_len (size_t)-1
+    if (!seekdb_row_is_null(row, 0)) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Column NULL should report is_null true"};
+    }
+    size_t len0 = seekdb_row_get_string_len(row, 0);
+    if (len0 != static_cast<size_t>(-1)) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Column NULL get_string_len should return (size_t)-1"};
+    }
+    // Column 1: empty string '' -> row_is_null false, get_string_len 0, get_string(buf,1) writes '\0'
+    if (seekdb_row_is_null(row, 1)) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Column '' should report is_null false"};
+    }
+    size_t len1 = seekdb_row_get_string_len(row, 1);
+    if (len1 != 0) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Column '' get_string_len should return 0"};
+    }
+    char buf1[1];
+    if (seekdb_row_get_string(row, 1, buf1, 1) != SEEKDB_SUCCESS) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "get_string(row, 1, buf, 1) should succeed for ''"};
+    }
+    if (buf1[0] != '\0') {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Empty string should write '\\0' into buf"};
+    }
+    seekdb_result_free(result);
+    seekdb_connect_close(handle);
+    return {true, ""};
+}
+
+// C ABI: get_string_len returns actual length; get_string(buf_size>=len+1) returns full content (no truncation).
+TestResult test_long_string_length_and_full_read() {
+    SeekdbHandle handle = nullptr;
+    int ret = seekdb_connect(&handle, "test", true);
+    if (ret != SEEKDB_SUCCESS) {
+        return {false, "Failed to connect"};
+    }
+    SeekdbResult result = nullptr;
+    ret = seekdb_query(handle, "DROP TABLE IF EXISTS test_long_str", &result);
+    if (result) seekdb_result_free(result);
+    ret = seekdb_query(handle, "CREATE TABLE test_long_str (id INT PRIMARY KEY, t VARCHAR(10000))", &result);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to create table"};
+    }
+    if (result) seekdb_result_free(result);
+    const size_t long_len = 10000;  // C ABI: get_string_len returns actual length; get_string returns full (VARCHAR in-row or LOB via read_lob_data)
+    std::string long_val(long_len, 'x');
+    std::string sql = "INSERT INTO test_long_str VALUES (1, '";
+    sql += long_val;
+    sql += "')";
+    ret = seekdb_query(handle, sql.c_str(), &result);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to insert long string"};
+    }
+    if (result) seekdb_result_free(result);
+    ret = seekdb_query(handle, "SELECT t FROM test_long_str WHERE id = 1", &result);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to select"};
+    }
+    result = seekdb_store_result(handle);
+    if (result == nullptr) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to store result"};
+    }
+    SeekdbRow row = seekdb_fetch_row(result);
+    if (row == nullptr) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Failed to fetch row"};
+    }
+    size_t len = seekdb_row_get_string_len(row, 0);
+    if (len != long_len) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "get_string_len should return actual length " + std::to_string(long_len)};
+    }
+    std::vector<char> buf(long_len + 1);
+    if (seekdb_row_get_string(row, 0, buf.data(), buf.size()) != SEEKDB_SUCCESS) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "get_string with buf_size len+1 should succeed"};
+    }
+    if (strlen(buf.data()) != long_len) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Full content length mismatch"};
+    }
+    for (size_t i = 0; i < long_len; i++) {
+        if (buf[i] != 'x') {
+            seekdb_result_free(result);
+            seekdb_connect_close(handle);
+            return {false, "Content mismatch at offset " + std::to_string(i)};
+        }
+    }
+    seekdb_result_free(result);
+    seekdb_connect_close(handle);
+    return {true, ""};
+}
+
+// 100KB document: must not read back as '' or null; get_string_len returns actual length; get_string returns full content.
+// Uses parameterized INSERT + LONGTEXT; session ob_default_lob_inrow_threshold so 100KB is in-row (or C ABI read_lob_data for out-of-row).
+TestResult test_very_long_document_100kb() {
+    SeekdbHandle handle = nullptr;
+    int ret = seekdb_connect(&handle, "test", true);
+    if (ret != SEEKDB_SUCCESS) {
+        return {false, "Failed to connect"};
+    }
+    SeekdbResult result = nullptr;
+    ret = seekdb_query(handle, "SET SESSION max_allowed_packet = 2097152", &result);
+    if (result) seekdb_result_free(result);
+    // Align with server: use session default for LOB in-row threshold so 100KB is in-row; no table option (same DDL as server).
+    ret = seekdb_query(handle, "SET SESSION ob_default_lob_inrow_threshold = 262144", &result);
+    if (result) seekdb_result_free(result);
+    ret = seekdb_query(handle, "DROP TABLE IF EXISTS test_doc_100k", &result);
+    if (result) seekdb_result_free(result);
+    ret = seekdb_query(handle, "CREATE TABLE test_doc_100k (id INT PRIMARY KEY, doc LONGTEXT)", &result);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to create table"};
+    }
+    if (result) seekdb_result_free(result);
+    size_t doc_len = 100000;  // 100KB document
+    std::string doc_val(doc_len, 'a');
+    SeekdbBind binds[2];
+    int32_t id_val = 1;
+    binds[0].buffer_type = SEEKDB_TYPE_LONG;
+    binds[0].buffer = &id_val;
+    binds[0].buffer_length = sizeof(id_val);
+    binds[0].length = nullptr;
+    bool null0 = false;
+    binds[0].is_null = &null0;
+    binds[1].buffer_type = SEEKDB_TYPE_STRING;
+    binds[1].buffer = const_cast<char*>(doc_val.data());
+    binds[1].buffer_length = static_cast<unsigned long>(doc_len);
+    unsigned long doc_len_ul = static_cast<unsigned long>(doc_len);
+    binds[1].length = &doc_len_ul;
+    bool null1 = false;
+    binds[1].is_null = &null1;
+    ret = seekdb_query_with_params(handle, "INSERT INTO test_doc_100k VALUES (?, ?)", &result, binds, 2);
+    if (ret != SEEKDB_SUCCESS) {
+        const char* err = seekdb_error(handle);
+        std::string msg = "Failed to insert 100KB document";
+        if (err && strlen(err) > 0) { msg += " ("; msg += err; msg += ")"; }
+        seekdb_connect_close(handle);
+        return {false, msg};
+    }
+    if (result) seekdb_result_free(result);
+    ret = seekdb_query(handle, "SELECT doc FROM test_doc_100k WHERE id = 1", &result);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to select"};
+    }
+    result = seekdb_store_result(handle);
+    if (result == nullptr) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to store result"};
+    }
+    SeekdbRow row = seekdb_fetch_row(result);
+    if (row == nullptr) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Failed to fetch row"};
+    }
+    if (seekdb_row_is_null(row, 0)) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "100KB document must not be reported as null"};
+    }
+    size_t len = seekdb_row_get_string_len(row, 0);
+    if (len != doc_len) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "get_string_len should return actual length " + std::to_string(doc_len)};
+    }
+    std::vector<char> buf(doc_len + 1);
+    if (seekdb_row_get_string(row, 0, buf.data(), buf.size()) != SEEKDB_SUCCESS) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "get_string(buf_size>=len+1) should return full content"};
+    }
+    if (strlen(buf.data()) != doc_len) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Full content length mismatch"};
+    }
+    seekdb_result_free(result);
+    seekdb_connect_close(handle);
+    return {true, ""};
+}
+
+// Metadata with newlines, quotes, backslashes must be stored and read back completely (no truncation/corruption).
+TestResult test_special_characters_in_metadata() {
+    SeekdbHandle handle = nullptr;
+    int ret = seekdb_connect(&handle, "test", true);
+    if (ret != SEEKDB_SUCCESS) {
+        return {false, "Failed to connect"};
+    }
+    SeekdbResult result = nullptr;
+    ret = seekdb_query(handle, "DROP TABLE IF EXISTS test_meta_special", &result);
+    if (result) seekdb_result_free(result);
+    ret = seekdb_query(handle, "CREATE TABLE test_meta_special (id INT PRIMARY KEY, meta VARCHAR(2000))", &result);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to create table"};
+    }
+    if (result) seekdb_result_free(result);
+    std::string meta_val = "{\"key\":\"value with \\\"quotes\\\" and \\n newline and \\\\ backslash\"}";
+    std::string escaped;
+    for (char c : meta_val) {
+        if (c == '\'') escaped += "''";
+        else if (c == '\\') escaped += "\\\\";
+        else escaped += c;
+    }
+    std::string sql = "INSERT INTO test_meta_special VALUES (1, '" + escaped + "')";
+    ret = seekdb_query(handle, sql.c_str(), &result);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to insert metadata with special chars"};
+    }
+    if (result) seekdb_result_free(result);
+    ret = seekdb_query(handle, "SELECT meta FROM test_meta_special WHERE id = 1", &result);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to select"};
+    }
+    result = seekdb_store_result(handle);
+    if (result == nullptr) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to store result"};
+    }
+    SeekdbRow row = seekdb_fetch_row(result);
+    if (row == nullptr) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Failed to fetch row"};
+    }
+    if (seekdb_row_is_null(row, 0)) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "metadata must not be reported as null"};
+    }
+    size_t len = seekdb_row_get_string_len(row, 0);
+    if (len == static_cast<size_t>(-1) || len != meta_val.length()) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "metadata get_string_len should return actual length"};
+    }
+    std::vector<char> buf(len + 1);
+    if (seekdb_row_get_string(row, 0, buf.data(), buf.size()) != SEEKDB_SUCCESS) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "get_string should return full metadata"};
+    }
+    if (strcmp(buf.data(), meta_val.c_str()) != 0) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "metadata content mismatch (truncation or corruption)"};
+    }
+    seekdb_result_free(result);
+    seekdb_connect_close(handle);
+    return {true, ""};
+}
+
 // Test seekdb_affected_rows() and seekdb_insert_id()
 TestResult test_affected_rows_and_insert_id() {
     SeekdbHandle handle = nullptr;
@@ -3895,6 +4195,10 @@ int main() {
         {"Row Operations", test_row_operations},
         {"Row Lengths", test_row_lengths},
         {"Row Is Null", test_row_is_null},
+        {"NULL vs Empty String (C ABI)", test_null_vs_empty_string},
+        {"Long String Length and Full Read (C ABI)", test_long_string_length_and_full_read},
+        {"Very Long Document 100KB (embedded)", test_very_long_document_100kb},
+        {"Special Characters in Metadata (embedded)", test_special_characters_in_metadata},
         {"Row Get Types", test_row_get_types},
         
         // ========== 4. Transaction Management ==========

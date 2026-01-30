@@ -45,6 +45,7 @@
 #include "sql/parser/parse_node.h"
 #include "share/schema/ob_priv_type.h"
 #include "share/ob_define.h"
+#include "share/rc/ob_tenant_base.h"  // MTL_SWITCH for read_lob_data (ObLobManager)
 #include "share/system_variable/ob_system_variable.h"
 #include "share/system_variable/ob_sys_var_class_type.h"
 #include "share/ob_errno.h"  // For ob_strerror
@@ -77,6 +78,7 @@ using namespace oceanbase::sqlclient;
 using namespace oceanbase::observer;
 using namespace oceanbase::sql;
 using namespace oceanbase::share;
+namespace share = oceanbase::share;  // MTL_SWITCH macro expands to share::ObTenantSwitchGuard
 using namespace oceanbase::lib;
 using namespace oceanbase::omt;
 using namespace oceanbase::palf::election;
@@ -127,6 +129,7 @@ struct SeekdbFieldStrings {
 
 struct SeekdbResultSet {
     std::vector<std::vector<std::string>> rows;
+    std::vector<std::vector<bool>> row_nulls;   // row_nulls[r][c] true iff cell (r,c) is SQL NULL (distinct from empty string)
     std::vector<std::string> column_names;
     int64_t current_row;
     int64_t row_count;
@@ -1682,15 +1685,19 @@ static int do_seekdb_execute_inner(ExecuteParams* params) {
         }
     }
     
-    // Fetch all rows
+    // Fetch all rows (MTL_SWITCH so read_lob_data can access ObLobManager for out-of-row LOB, e.g. 100KB)
     int64_t row_count = 0;
+    MTL_SWITCH(OB_SYS_TENANT_ID) {
     while (OB_SUCCESS == sql_result->next()) {
         std::vector<std::string> row;
+        std::vector<bool> row_null;
+        oceanbase::common::ObArenaAllocator row_lob_allocator(ObModIds::OB_MODULE_PAGE_ALLOCATOR);
         for (int64_t i = 0; i < column_count; ++i) {
             ObObj obj;
             if (OB_SUCCESS == sql_result->get_obj(i, obj)) {
                 if (obj.is_null()) {
-                    row.push_back(""); // NULL represented as empty string
+                    row.push_back(""); // SQL NULL (distinct from empty string)
+                    row_null.push_back(true);
                 } else {
                     char buf[4096];
                     int64_t pos = 0;
@@ -1752,6 +1759,7 @@ static int do_seekdb_execute_inner(ExecuteParams* params) {
                             } else {
                                 row.push_back("");
                             }
+                            row_null.push_back(false);
                         } else {
                             // Fallback: use print_sql_literal and remove quotes
                             pos = 0;
@@ -1771,18 +1779,35 @@ static int do_seekdb_execute_inner(ExecuteParams* params) {
                             } else {
                                 row.push_back("");
                             }
+                            row_null.push_back(false);
                         }
-                    } else if (ob_is_string_type(obj_type) || ob_is_text_tc(obj_type)) {
-                        // String types: get raw string value (without quotes)
+                    } else if (ob_is_string_type(obj_type) || ob_is_text_tc(obj_type) || ob_is_json_tc(obj_type)) {
+                        // String/JSON types: full content, no truncation (long document / metadata).
+                        // Empty string '' is not NULL. For LOB (TEXT/JSON out-of-row), use read_lob_data when get_string fails.
                         ObString str_val;
-                        if (OB_SUCCESS == obj.get_string(str_val)) {
+                        int get_ret = obj.get_string(str_val);
+                        if (OB_SUCCESS == get_ret) {
                             if (str_val.length() > 0 && str_val.ptr()) {
                                 row.push_back(std::string(str_val.ptr(), str_val.length()));
                             } else {
                                 row.push_back("");
                             }
+                            row_null.push_back(false);
+                        } else if ((ob_is_text_tc(obj_type) || ob_is_json_tc(obj_type)) && obj.is_lob_storage()) {
+                            ObString lob_str;
+                            if (OB_SUCCESS == obj.read_lob_data(row_lob_allocator, lob_str)) {
+                                if (lob_str.ptr() && lob_str.length() > 0) {
+                                    row.push_back(std::string(lob_str.ptr(), lob_str.length()));
+                                } else {
+                                    row.push_back("");
+                                }
+                            } else {
+                                row.push_back("");
+                            }
+                            row_null.push_back(false);
                         } else {
                             row.push_back("");
+                            row_null.push_back(false);
                         }
                     } else if (ob_is_float_tc(obj_type)) {
                         // Float types
@@ -1797,6 +1822,7 @@ static int do_seekdb_execute_inner(ExecuteParams* params) {
                         } else {
                             row.push_back("");
                         }
+                        row_null.push_back(false);
                     } else if (ob_is_double_tc(obj_type)) {
                         // Double types
                         double double_val = 0;
@@ -1810,6 +1836,7 @@ static int do_seekdb_execute_inner(ExecuteParams* params) {
                         } else {
                             row.push_back("");
                         }
+                        row_null.push_back(false);
                     } else if (obj_type == oceanbase::common::ObCollectionSQLType) {
                         // VECTOR: engine returns raw float32 binary; convert to JSON string "[v1, v2, ...]" without rounding.
                         // Directly format each float so e.g. "[1.1, 2.2, 3.3]".
@@ -1828,6 +1855,7 @@ static int do_seekdb_execute_inner(ExecuteParams* params) {
                         } else {
                             row.push_back("");
                         }
+                        row_null.push_back(false);
                     } else {
                         // For other types, use print_sql_literal and remove quotes if present
                         if (OB_SUCCESS == obj.print_sql_literal(buf, sizeof(buf), pos)) {
@@ -1847,17 +1875,20 @@ static int do_seekdb_execute_inner(ExecuteParams* params) {
                         } else {
                             row.push_back("");
                         }
+                        row_null.push_back(false);
                     }
                 }
             } else {
                 row.push_back("");
+                row_null.push_back(false);
             }
         }
         result_set->rows.push_back(row);
+        result_set->row_nulls.push_back(row_null);
         row_count++;
     }
-    
     result_set->row_count = row_count;
+    }  // MTL_SWITCH
     
     // Update affected rows from result set for DML statements (INSERT/UPDATE/DELETE)
     // This allows seekdb_affected_rows() to return correct value even when using seekdb_query()
@@ -2448,13 +2479,16 @@ SeekdbRow seekdb_fetch_row(SeekdbResult result) {
         row_data->row_index = rs->current_row;
     }
     
-    // Pre-compute lengths for seekdb_fetch_lengths()
+    // Pre-compute lengths for seekdb_fetch_lengths(); NULL -> 0, non-NULL -> actual byte length
     rs->current_lengths.clear();
     rs->current_lengths.resize(rs->column_count, 0);
     if (rs->current_row < static_cast<int64_t>(rs->rows.size())) {
         const std::vector<std::string>& row_vec = rs->rows[rs->current_row];
         for (int32_t i = 0; i < rs->column_count && i < static_cast<int32_t>(row_vec.size()); i++) {
-            if (!row_vec[i].empty()) {
+            bool is_null = (rs->current_row < static_cast<int64_t>(rs->row_nulls.size()) &&
+                           i < static_cast<int32_t>(rs->row_nulls[rs->current_row].size()) &&
+                           rs->row_nulls[rs->current_row][i]);
+            if (!is_null) {
                 rs->current_lengths[i] = static_cast<unsigned long>(row_vec[i].length());
             }
         }
@@ -2481,7 +2515,12 @@ size_t seekdb_row_get_string_len(SeekdbRow row, int32_t column_index) {
     if (column_index >= static_cast<int32_t>(row_vec.size())) {
         return static_cast<size_t>(-1);
     }
-    
+    // C ABI contract: NULL returns (size_t)-1; empty string '' returns 0; non-empty returns actual byte length
+    if (row_data->row_index < static_cast<int64_t>(rs->row_nulls.size()) &&
+        column_index < static_cast<int32_t>(rs->row_nulls[row_data->row_index].size()) &&
+        rs->row_nulls[row_data->row_index][column_index]) {
+        return static_cast<size_t>(-1);
+    }
     return row_vec[column_index].length();
 }
 
@@ -2503,15 +2542,23 @@ int seekdb_row_get_string(SeekdbRow row, int32_t column_index, char* value, size
     if (column_index >= static_cast<int32_t>(row_vec.size())) {
         return SEEKDB_ERROR_INVALID_PARAM;
     }
-    
-    const std::string& str_val = row_vec[column_index];
-    size_t copy_len = std::min(str_val.length(), value_len - 1);  // leave room for null terminator
-    // Use memcpy so binary (e.g. VECTOR little-endian float32) is copied in full, not truncated at '\0'
-    if (copy_len > 0 && str_val.data()) {
-        memcpy(value, str_val.data(), copy_len);
+    // C ABI contract: NULL -> write '\0' and succeed; non-NULL requires value_len >= len+1 for full copy (no truncation)
+    bool is_null = (row_data->row_index < static_cast<int64_t>(rs->row_nulls.size()) &&
+                    column_index < static_cast<int32_t>(rs->row_nulls[row_data->row_index].size()) &&
+                    rs->row_nulls[row_data->row_index][column_index]);
+    if (is_null) {
+        value[0] = '\0';
+        return SEEKDB_SUCCESS;
     }
-    value[copy_len] = '\0';
-    
+    const std::string& str_val = row_vec[column_index];
+    size_t len = str_val.length();
+    if (value_len < len + 1) {
+        return SEEKDB_ERROR_INVALID_PARAM;  // Buffer too small; caller should use seekdb_row_get_string_len first
+    }
+    if (len > 0 && str_val.data()) {
+        memcpy(value, str_val.data(), len);
+    }
+    value[len] = '\0';
     return SEEKDB_SUCCESS;
 }
 
@@ -2574,13 +2621,15 @@ bool seekdb_row_is_null(SeekdbRow row, int32_t column_index) {
         return true;
     }
     
-    const std::vector<std::string>& row_vec = rs->rows[row_data->row_index];
-    if (column_index >= static_cast<int32_t>(row_vec.size())) {
+    if (column_index >= static_cast<int32_t>(rs->rows[row_data->row_index].size())) {
         return true;
     }
-    
-    // Empty string represents NULL in our implementation
-    return row_vec[column_index].empty();
+    // C ABI contract: only true for SQL NULL; empty string '' returns false (distinct from NULL)
+    if (row_data->row_index < static_cast<int64_t>(rs->row_nulls.size()) &&
+        column_index < static_cast<int32_t>(rs->row_nulls[row_data->row_index].size())) {
+        return rs->row_nulls[row_data->row_index][column_index];
+    }
+    return false;  // Legacy result set without row_nulls (e.g. param metadata)
 }
 
 int seekdb_data_seek(SeekdbResult result, my_ulonglong offset) {
@@ -3653,7 +3702,9 @@ int seekdb_result_fetch_all(
             }
             
             const std::string& cell_value = row[col_idx];
-            bool is_null = cell_value.empty(); // Empty string represents NULL in our implementation
+            bool is_null = (row_idx < static_cast<int64_t>(rs->row_nulls.size()) &&
+                           col_idx < static_cast<int32_t>(rs->row_nulls[row_idx].size()) &&
+                           rs->row_nulls[row_idx][col_idx]);
             
             int ret = callback(
                 row_idx,
@@ -4821,6 +4872,7 @@ SeekdbResult seekdb_stmt_param_metadata(SeekdbStmt stmt) {
         row.push_back("0");
         
         result_set->rows.push_back(row);
+        result_set->row_nulls.push_back(std::vector<bool>(6, false));  // param metadata: no NULL cells
     }
     
     result_set->row_count = static_cast<int64_t>(result_set->rows.size());
