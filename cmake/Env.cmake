@@ -305,6 +305,10 @@ option(OB_ENABLE_AVX2 "enable AVX2 and related instruction set support for x86_6
 
 include(CMakeFindBinUtils)
 EXECUTE_PROCESS(COMMAND uname -m COMMAND tr -d '\n' OUTPUT_VARIABLE ARCHITECTURE )
+# On macOS cross-build (e.g. darwin-x64 on Apple Silicon), use target arch from CMAKE_OSX_ARCHITECTURES
+if(APPLE AND CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
+  set(ARCHITECTURE "x86_64")
+endif()
 if( ${ARCHITECTURE} STREQUAL "x86_64" )
     set(MTUNE_CFLAGS -mtune=core2)
     set(ARCH_LDFLAGS "")

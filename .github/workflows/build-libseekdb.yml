@@ -3,7 +3,7 @@
 # Reference build environments (use these systems/env as the standard):
 #   linux-x64:   runner ubuntu-22.04, container quay.io/pypa/manylinux2014_x86_64 (glibc 2.17, CentOS 7+), zip libseekdb-linux-x64.zip
 #   linux-arm64: runner ubuntu-22.04-arm, container quay.io/pypa/manylinux2014_aarch64 (glibc 2.17), zip libseekdb-linux-arm64.zip
-#   darwin-x64:  runner macos-14, native (cross-build), zip libseekdb-darwin-x64.zip (min macOS 11.0)
+#   darwin-x64:  runner macos-14, cross-build (arm64 host → x86_64), zip libseekdb-darwin-x64.zip (min macOS 11.0)
 #   darwin-arm64: runner macos-14, native, zip libseekdb-darwin-arm64.zip (min macOS 11.0)
 #
 # macOS builds use runner macos-14 and set CMAKE_OSX_DEPLOYMENT_TARGET=11.0 so the dylib runs on macOS 11+ (Big Sur and later).
@@ -65,6 +65,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # For PRs, build the branch head to avoid merge-commit conflict markers; for push use the pushed commit
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Cache deps (Linux, el7)
         uses: actions/cache@v4
@@ -134,6 +137,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # GitHub macOS runners are Apple Silicon only; darwin-x64 = cross-compile on arm64 for Intel Mac
           - platform: darwin-x64
             runner: macos-14
             artifact_name: libseekdb-darwin-x64
@@ -148,6 +152,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Install macOS dependencies
         run: brew install cmake dylibbundler googletest ccache pybind11 || true
