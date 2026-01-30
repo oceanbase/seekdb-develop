@@ -90,7 +90,7 @@ jobs:
               export PATH="$GITHUB_WORKSPACE/deps/3rd/usr/local/oceanbase/devtools/bin:$PATH"
               bash build.sh init
               PYVER=$(python3 -c "import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")")
-              bash build.sh release --init --make -DOB_USE_CCACHE=ON -DBUILD_EMBED_MODE=ON -DPYTHON_VERSION=$PYVER
+              bash build.sh release --init -DOB_USE_CCACHE=ON -DBUILD_EMBED_MODE=ON -DPYTHON_VERSION=$PYVER
               cd build_release && make -j$(nproc) libseekdb
               cd package/libseekdb && bash libseekdb-build.sh "$GITHUB_WORKSPACE/build_release/src/include"
             '
@@ -145,7 +145,7 @@ jobs:
           ARCH: ${{ matrix.arch }}
           CMAKE_OSX_ARCHITECTURES: ${{ matrix.cmake_arch }}
         run: |
-          bash build.sh release --init --make -DOB_USE_CCACHE=ON -DBUILD_EMBED_MODE=ON -DCMAKE_OSX_ARCHITECTURES=${{ matrix.cmake_arch }} -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          bash build.sh release --init -DOB_USE_CCACHE=ON -DBUILD_EMBED_MODE=ON -DCMAKE_OSX_ARCHITECTURES=${{ matrix.cmake_arch }} -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
           cd build_release && make -j$(sysctl -n hw.ncpu) libseekdb
 
       - name: Pack libseekdb (macOS)
