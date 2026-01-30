@@ -150,7 +150,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install macOS dependencies
-        run: brew install cmake dylibbundler googletest ccache || true
+        run: brew install cmake dylibbundler googletest ccache pybind11 || true
 
       - name: Cache deps (macOS)
         uses: actions/cache@v4
