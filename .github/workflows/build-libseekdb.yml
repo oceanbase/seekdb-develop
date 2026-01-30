@@ -181,7 +181,9 @@ jobs:
           # Env.cmake looks for ccache in deps/3rd/.../devtools/bin; put it there so no Env.cmake change is needed
           mkdir -p deps/3rd/usr/local/oceanbase/devtools/bin
           ln -sf "$(which ccache)" deps/3rd/usr/local/oceanbase/devtools/bin/ccache
-          bash build.sh release --init -DOB_USE_CCACHE=ON -DBUILD_EMBED_MODE=ON -DCMAKE_OSX_ARCHITECTURES=${{ matrix.cmake_arch }} -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          # Use runner's Python (macOS has 3.x, not 3.8 by default) so embed CMake finds it
+          PYVER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          bash build.sh release --init -DOB_USE_CCACHE=ON -DBUILD_EMBED_MODE=ON -DPYTHON_VERSION=$PYVER -DCMAKE_OSX_ARCHITECTURES=${{ matrix.cmake_arch }} -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
           cd build_release && make -j$(sysctl -n hw.ncpu) libseekdb
 
       - name: Pack libseekdb (macOS)
