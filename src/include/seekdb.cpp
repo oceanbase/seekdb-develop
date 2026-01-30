@@ -60,6 +60,7 @@
 #include "lib/alloc/alloc_assist.h"  // For ACHUNK_PRESERVE_SIZE
 #include "common/ob_smart_call.h"  // For CALL_WITH_NEW_STACK
 #include <unistd.h>
+#include <fcntl.h>
 #ifdef __APPLE__
 #include <sys/mount.h>  // statfs on macOS
 #else
@@ -679,22 +680,36 @@ static int do_seekdb_open_inner(const char* db_dir, int port) {
         
         OB_LOGGER.set_log_level("INFO");
         
+        // Align with Python embed (ob_embed_impl.cpp): redirect stdout so "successfully init log writer"
+        // (LOG_STDOUT in ob_base_log_writer.cpp during set_file_name) goes to log file, not terminal.
+        // Open log file first, redirect stdout to it, then set_file_name; then sync stdout to logger's fd.
+        int saved_stdout = dup(STDOUT_FILENO);
         ObSqlString log_file;
         try {
             if (OB_FAIL(log_file.assign_fmt("%s/log/seekdb.log", opts.base_dir_.ptr()))) {
                 set_error(nullptr, "calculate log file failed");
             } else {
+                int fd_pre = open(log_file.ptr(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+                if (fd_pre >= 0) {
+                    dup2(fd_pre, STDOUT_FILENO);
+                }
                 OB_LOGGER.set_file_name(log_file.ptr(), true, false);
+                if (fd_pre >= 0) {
+                    dup2(OB_LOGGER.get_svr_log().fd_, STDOUT_FILENO);
+                    close(fd_pre);
+                }
             }
         } catch (const std::exception& e) {
+            if (saved_stdout >= 0) {
+                dup2(saved_stdout, STDOUT_FILENO);
+                close(saved_stdout);
+            }
             return SEEKDB_ERROR_MEMORY_ALLOC;
         }
-        
-        // Redirect stdout to log file to suppress LOG_STDOUT messages (aligned with Python embed)
-        // Python embed uses: dup2(OB_LOGGER.get_svr_log().fd_, STDOUT_FILENO)
-        // This redirects "successfully init log writer" to log file instead of terminal
-        int saved_stdout = dup(STDOUT_FILENO);
-        dup2(OB_LOGGER.get_svr_log().fd_, STDOUT_FILENO);
+        // Redirect stdout to log file during OBSERVER.init() (same as Python embed after set_file_name)
+        if (OB_SUCC(ret)) {
+            dup2(OB_LOGGER.get_svr_log().fd_, STDOUT_FILENO);
+        }
         
         // Create worker to make this thread having a binding worker (aligned with main.cpp)
         oceanbase::lib::Worker worker;
@@ -715,16 +730,18 @@ static int do_seekdb_open_inner(const char* db_dir, int port) {
             try {
                 ret = OBSERVER.init(opts, log_cfg);
             } catch (const std::exception& e) {
-                // Restore stdout before returning
-                dup2(saved_stdout, STDOUT_FILENO);
-                close(saved_stdout);
+                if (saved_stdout >= 0) {
+                    dup2(saved_stdout, STDOUT_FILENO);
+                    close(saved_stdout);
+                }
                 return SEEKDB_ERROR_MEMORY_ALLOC;
             }
         }
         
-        // Restore stdout after initialization (aligned with Python embed)
-        dup2(saved_stdout, STDOUT_FILENO);
-        close(saved_stdout);
+        if (saved_stdout >= 0) {
+            dup2(saved_stdout, STDOUT_FILENO);
+            close(saved_stdout);
+        }
         
         
         
