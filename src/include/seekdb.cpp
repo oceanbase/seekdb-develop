@@ -1695,11 +1695,16 @@ static int do_seekdb_execute_inner(ExecuteParams* params) {
         for (int64_t i = 0; i < column_count; ++i) {
             ObObj obj;
             if (OB_SUCCESS == sql_result->get_obj(i, obj)) {
+                oceanbase::common::ObObjType col_type = oceanbase::common::ObNullType;
+                if (static_cast<size_t>(i) < result_set->fields.size()) {
+                    col_type = static_cast<oceanbase::common::ObObjType>(result_set->fields[i].type);
+                }
                 if (obj.is_null()) {
-                    row.push_back(""); // SQL NULL (distinct from empty string)
+                    row.push_back("");
                     row_null.push_back(true);
                 } else {
-                    char buf[4096];
+                    // Larger buffer for JSON/metadata (print_sql_literal may produce long escaped string)
+                    char buf[32768];
                     int64_t pos = 0;
                     oceanbase::common::ObObjType obj_type = obj.get_type();
                     
@@ -1781,19 +1786,45 @@ static int do_seekdb_execute_inner(ExecuteParams* params) {
                             }
                             row_null.push_back(false);
                         }
-                    } else if (ob_is_string_type(obj_type) || ob_is_text_tc(obj_type) || ob_is_json_tc(obj_type)) {
-                        // String/JSON types: full content, no truncation (long document / metadata).
-                        // Empty string '' is not NULL. For LOB (TEXT/JSON out-of-row), use read_lob_data when get_string fails.
+                    } else if (ob_is_json_tc(obj_type)) {
+                        // JSON type: get_string() returns binary JSON (JSON_BIN). Always use print_sql_literal
+                        // to get text JSON so JS JSON.parse() works (handles special chars in metadata).
+                        pos = 0;
+                        if (OB_SUCCESS == obj.print_sql_literal(buf, sizeof(buf), pos) && pos > 0) {
+                            std::string sql_literal(buf, static_cast<size_t>(pos));
+                            if (sql_literal.length() >= 2 && sql_literal.front() == '\'' && sql_literal.back() == '\'') {
+                                sql_literal = sql_literal.substr(1, sql_literal.length() - 2);
+                                for (size_t q = 0; (q = sql_literal.find("''", q)) != std::string::npos; q += 1)
+                                    sql_literal.replace(q, 2, "'");
+                            }
+                            row.push_back(sql_literal);
+                        } else {
+                            row.push_back("");
+                        }
+                        row_null.push_back(false);
+                    } else if (ob_is_string_type(obj_type) || ob_is_text_tc(obj_type)) {
+                        // String/TEXT types: full content via get_string; LOB use read_lob_data when get_string fails.
                         ObString str_val;
                         int get_ret = obj.get_string(str_val);
                         if (OB_SUCCESS == get_ret) {
                             if (str_val.length() > 0 && str_val.ptr()) {
                                 row.push_back(std::string(str_val.ptr(), str_val.length()));
                             } else {
-                                row.push_back("");
+                                pos = 0;
+                                if (OB_SUCCESS == obj.print_sql_literal(buf, sizeof(buf), pos) && pos > 0) {
+                                    std::string sql_literal(buf, static_cast<size_t>(pos));
+                                    if (sql_literal.length() >= 2 && sql_literal.front() == '\'' && sql_literal.back() == '\'') {
+                                        sql_literal = sql_literal.substr(1, sql_literal.length() - 2);
+                                        for (size_t q = 0; (q = sql_literal.find("''", q)) != std::string::npos; q += 1)
+                                            sql_literal.replace(q, 2, "'");
+                                    }
+                                    row.push_back(sql_literal);
+                                } else {
+                                    row.push_back("");
+                                }
                             }
                             row_null.push_back(false);
-                        } else if ((ob_is_text_tc(obj_type) || ob_is_json_tc(obj_type)) && obj.is_lob_storage()) {
+                        } else if ((ob_is_text_tc(obj_type)) && obj.is_lob_storage()) {
                             ObString lob_str;
                             if (OB_SUCCESS == obj.read_lob_data(row_lob_allocator, lob_str)) {
                                 if (lob_str.ptr() && lob_str.length() > 0) {
@@ -1806,7 +1837,18 @@ static int do_seekdb_execute_inner(ExecuteParams* params) {
                             }
                             row_null.push_back(false);
                         } else {
-                            row.push_back("");
+                            pos = 0;
+                            if (OB_SUCCESS == obj.print_sql_literal(buf, sizeof(buf), pos) && pos > 0) {
+                                std::string sql_literal(buf, static_cast<size_t>(pos));
+                                if (sql_literal.length() >= 2 && sql_literal.front() == '\'' && sql_literal.back() == '\'') {
+                                    sql_literal = sql_literal.substr(1, sql_literal.length() - 2);
+                                    for (size_t q = 0; (q = sql_literal.find("''", q)) != std::string::npos; q += 1)
+                                        sql_literal.replace(q, 2, "'");
+                                }
+                                row.push_back(sql_literal);
+                            } else {
+                                row.push_back("");
+                            }
                             row_null.push_back(false);
                         }
                     } else if (ob_is_float_tc(obj_type)) {

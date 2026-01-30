@@ -2591,6 +2591,72 @@ TestResult test_special_characters_in_metadata() {
     return {true, ""};
 }
 
+// Empty JSON object "{}" in a JSON column must round-trip (like seekdb-js collection metadata).
+TestResult test_empty_json_metadata() {
+    SeekdbHandle handle = nullptr;
+    int ret = seekdb_connect(&handle, "test", true);
+    if (ret != SEEKDB_SUCCESS) {
+        return {false, "Failed to connect"};
+    }
+    SeekdbResult result = nullptr;
+    ret = seekdb_query(handle, "DROP TABLE IF EXISTS test_empty_json_meta", &result);
+    if (result) seekdb_result_free(result);
+    ret = seekdb_query(handle, "CREATE TABLE test_empty_json_meta (id INT PRIMARY KEY, meta JSON)", &result);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to create table"};
+    }
+    if (result) seekdb_result_free(result);
+    ret = seekdb_query(handle, "INSERT INTO test_empty_json_meta VALUES (1, '{}')", &result);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to insert {}"};
+    }
+    if (result) seekdb_result_free(result);
+    ret = seekdb_query(handle, "SELECT meta FROM test_empty_json_meta WHERE id = 1", &result);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to select"};
+    }
+    result = seekdb_store_result(handle);
+    if (result == nullptr) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to store result"};
+    }
+    SeekdbRow row = seekdb_fetch_row(result);
+    if (row == nullptr) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Failed to fetch row"};
+    }
+    if (seekdb_row_is_null(row, 0)) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "meta must not be reported as null"};
+    }
+    size_t len = seekdb_row_get_string_len(row, 0);
+    if (len == static_cast<size_t>(-1)) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "meta length should not be -1"};
+    }
+    std::vector<char> buf(len + 1);
+    if (seekdb_row_get_string(row, 0, buf.data(), buf.size()) != SEEKDB_SUCCESS) {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "get_string failed"};
+    }
+    std::string meta_str(buf.data());
+    if (meta_str != "{}") {
+        seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "expected {} got: " + meta_str};
+    }
+    seekdb_result_free(result);
+    seekdb_connect_close(handle);
+    return {true, ""};
+}
+
 // Test seekdb_affected_rows() and seekdb_insert_id()
 TestResult test_affected_rows_and_insert_id() {
     SeekdbHandle handle = nullptr;
@@ -4199,6 +4265,7 @@ int main() {
         {"Long String Length and Full Read (C ABI)", test_long_string_length_and_full_read},
         {"Very Long Document 100KB (embedded)", test_very_long_document_100kb},
         {"Special Characters in Metadata (embedded)", test_special_characters_in_metadata},
+        {"Empty JSON Metadata (embedded)", test_empty_json_metadata},
         {"Row Get Types", test_row_get_types},
         
         // ========== 4. Transaction Management ==========

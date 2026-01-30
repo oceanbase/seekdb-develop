@@ -201,6 +201,12 @@ size_t seekdb_row_get_string_len(SeekdbRow row, int32_t column_index);
  * @param value Output buffer for value
  * @param value_len Buffer size (must be >= seekdb_row_get_string_len()+1 for non-NULL to copy in full; no truncation)
  * @return SEEKDB_SUCCESS on success. For NULL: writes '\\0' and succeeds. For non-NULL: returns error if value_len < len+1.
+ *
+ * String/JSON column semantics (aligned with seekdb_row_get_string_len and seekdb_row_is_null):
+ * - STRING/TEXT: actual byte length is returned; empty string '' has length 0 and seekdb_row_is_null false.
+ * - JSON columns (e.g. metadata): empty object "{}" and JSON with special characters (newline, quote, backslash)
+ *   are returned as complete, valid JSON strings; seekdb_row_is_null is false. Long JSON may be stored out-of-row
+ *   (LOB); length and content are still returned in full. Encoding is UTF-8.
  */
 int seekdb_row_get_string(SeekdbRow row, int32_t column_index, char* value, size_t value_len);
 
