@@ -18,8 +18,8 @@ The supported systems and environments are defined by the GitHub Actions workflo
 | ----------- | ------------------------- | ------------------------------------------------------- | ------------------------- |
 | Linux x64   | libseekdb-linux-x64.zip   | ubuntu-22.04 + quay.io/pypa/manylinux2014_x86_64        | oceanbase.el7.x86_64.deps |
 | Linux arm64 | libseekdb-linux-arm64.zip | ubuntu-22.04-arm + quay.io/pypa/manylinux2014_aarch64    | oceanbase.el7.aarch64.deps |
-| macOS x64   | libseekdb-darwin-x64.zip  | macos-13 (cross-build)                                  | oceanbase.macos.arm64.deps |
-| macOS arm64 | libseekdb-darwin-arm64.zip| macos-13 (native)                                       | oceanbase.macos.arm64.deps |
+| macOS x64   | libseekdb-darwin-x64.zip  | macos-14 (cross-build)                                  | oceanbase.macos.arm64.deps |
+| macOS arm64 | libseekdb-darwin-arm64.zip| macos-14 (native)                                       | oceanbase.macos.arm64.deps |
 
 Use these systems and deps as the standard when building or consuming libseekdb.
 
@@ -34,7 +34,7 @@ To check your system: `ldd --version` or `getconf GNU_LIBC_VERSION`.
 
 ### macOS compatibility
 
-CI macOS builds use **macOS 13** runners and set **CMAKE_OSX_DEPLOYMENT_TARGET=11.0**, so the prebuilt `libseekdb.dylib` runs on **macOS 11 (Big Sur) and later** (12, 13, 14, 15). Setting the deployment target to 11.0 allows use on most current and recent macOS versions.
+CI macOS builds use **macOS 14** runners and set **CMAKE_OSX_DEPLOYMENT_TARGET=11.0**, so the prebuilt `libseekdb.dylib` runs on **macOS 11 (Big Sur) and later** (12, 13, 14, 15). Setting the deployment target to 11.0 allows use on most current and recent macOS versions.
 
 ## Package contents and standalone distribution
 
@@ -73,5 +73,5 @@ libs/              # Dependency dylibs (macOS only; collected by dylibbundler)
 
 ### Notes
 
-- **OS and architecture**: The zip name reflects the build OS and CPU: `darwin-x64`, `darwin-arm64`, `linux-x64`, `linux-arm64` (x64 = x86_64). Use the matching zip for the target environment. On Linux, the prebuilt .so requires glibc ≥ 2.17 (see [Linux glibc compatibility](#linux-glibc-compatibility)), including CentOS 7; on macOS, the prebuilt dylib is built on **macOS 13** with **minimum deployment target 11.0**, so it runs on **macOS 11 (Big Sur) and later** (12, 13, 14, 15).
+- **OS and architecture**: The zip name reflects the build OS and CPU: `darwin-x64`, `darwin-arm64`, `linux-x64`, `linux-arm64` (x64 = x86_64). Use the matching zip for the target environment. On Linux, the prebuilt .so requires glibc ≥ 2.17 (see [Linux glibc compatibility](#linux-glibc-compatibility)), including CentOS 7; on macOS, the prebuilt dylib is built on **macOS 14** with **minimum deployment target 11.0**, so it runs on **macOS 11 (Big Sur) and later** (12, 13, 14, 15).
 - **Rebuilding**: After changing loader path or dependencies, run `libseekdb-build.sh` again to produce a new zip.

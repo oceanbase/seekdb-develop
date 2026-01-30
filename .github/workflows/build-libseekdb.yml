@@ -3,10 +3,10 @@
 # Reference build environments (use these systems/env as the standard):
 #   linux-x64:   runner ubuntu-22.04, container quay.io/pypa/manylinux2014_x86_64 (glibc 2.17, CentOS 7+), zip libseekdb-linux-x64.zip
 #   linux-arm64: runner ubuntu-22.04-arm, container quay.io/pypa/manylinux2014_aarch64 (glibc 2.17), zip libseekdb-linux-arm64.zip
-#   darwin-x64:  runner macos-13, native (cross-build), zip libseekdb-darwin-x64.zip (min macOS 11.0)
-#   darwin-arm64: runner macos-13, native, zip libseekdb-darwin-arm64.zip (min macOS 11.0)
+#   darwin-x64:  runner macos-14, native (cross-build), zip libseekdb-darwin-x64.zip (min macOS 11.0)
+#   darwin-arm64: runner macos-14, native, zip libseekdb-darwin-arm64.zip (min macOS 11.0)
 #
-# macOS builds use runner macos-13 and set CMAKE_OSX_DEPLOYMENT_TARGET=11.0 so the dylib runs on macOS 11+ (Big Sur and later).
+# macOS builds use runner macos-14 and set CMAKE_OSX_DEPLOYMENT_TARGET=11.0 so the dylib runs on macOS 11+ (Big Sur and later).
 # Artifacts: four platform zips; combined artifact libseekdb-all-platforms; optional S3 upload when DESTINATION_TARGET_PATH or AWS_S3_BUCKET and credentials are set.
 name: Build libseekdb
 run-name: Build libseekdb for ${{ github.sha }}
@@ -110,12 +110,12 @@ jobs:
       matrix:
         include:
           - platform: darwin-x64
-            runner: macos-13
+            runner: macos-14
             artifact_name: libseekdb-darwin-x64
             arch: x86_64
             cmake_arch: x86_64
           - platform: darwin-arm64
-            runner: macos-13
+            runner: macos-14
             artifact_name: libseekdb-darwin-arm64
             arch: arm64
             cmake_arch: arm64
