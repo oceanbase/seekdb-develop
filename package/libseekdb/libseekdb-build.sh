@@ -95,13 +95,20 @@ case "$UNAME_S" in
 esac
 
 UNAME_M="$(uname -m)"
-case "$UNAME_M" in
-  arm64|aarch64)   ARCH="arm64"   ;;
-  x86_64|amd64)   ARCH="x86_64" ;;
-  *)              echo "error: unsupported arch: $UNAME_M" >&2; exit 1 ;;
-esac
+if [[ -n "${ARCH:-}" ]]; then
+  echo "[BUILD] Using ARCH from environment: $ARCH"
+else
+  case "$UNAME_M" in
+    arm64|aarch64)   ARCH="arm64"   ;;
+    x86_64|amd64)   ARCH="x86_64" ;;
+    *)              echo "error: unsupported arch: $UNAME_M" >&2; exit 1 ;;
+  esac
+fi
 
-ZIP_NAME="libseekdb-${OS}-${ARCH}.zip"
+# Zip name uses x64 for x86_64 (darwin-x64, linux-x64)
+ARCH_SUFFIX="${ARCH}"
+[[ "$ARCH" == "x86_64" ]] && ARCH_SUFFIX="x64"
+ZIP_NAME="libseekdb-${OS}-${ARCH_SUFFIX}.zip"
 MAIN_LIB_NAME="$(basename "$MAIN_LIB")"
 mkdir -p "$PACKAGE_BUILD_DIR"
 OUTPUT_ZIP="$PACKAGE_BUILD_DIR/$ZIP_NAME"

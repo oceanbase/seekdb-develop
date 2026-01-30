@@ -1,0 +1,213 @@
+# Build, pack and upload libseekdb for multiple platforms (linux/mac + x86/arm) to S3
+#
+# Reference build environments (use these systems/env as the standard):
+#   linux-x64:   runner ubuntu-22.04, container quay.io/pypa/manylinux2014_x86_64 (glibc 2.17, CentOS 7+), zip libseekdb-linux-x64.zip
+#   linux-arm64: runner ubuntu-22.04-arm, container quay.io/pypa/manylinux2014_aarch64 (glibc 2.17), zip libseekdb-linux-arm64.zip
+#   darwin-x64:  runner macos-14, native (cross-build), zip libseekdb-darwin-x64.zip (min macOS 11.0)
+#   darwin-arm64: runner macos-14, native, zip libseekdb-darwin-arm64.zip (min macOS 11.0)
+#
+# macOS builds set CMAKE_OSX_DEPLOYMENT_TARGET=11.0 so the dylib runs on macOS 11+ (Big Sur and later).
+# Artifacts: four platform zips; combined artifact libseekdb-all-platforms; optional S3 upload when DESTINATION_TARGET_PATH or AWS_S3_BUCKET and credentials are set.
+name: Build libseekdb
+run-name: Build libseekdb for ${{ github.sha }}
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+      - "*.*.x"
+      - "integration/*"
+    paths-ignore:
+      - "!.github/workflows/build-libseekdb*"
+      - ".github/**"
+      - "*.md"
+      - "LICENSE"
+      - "CODEOWNERS"
+      - "docs/**"
+  workflow_dispatch:
+  pull_request:
+    paths-ignore:
+      - ".github/**"
+      - "!.github/workflows/build-libseekdb*"
+      - "*.md"
+      - "LICENSE"
+      - "CODEOWNERS"
+      - "docs/**"
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+  # S3 upload defaults (override via Variables: DESTINATION_TARGET_PATH or AWS_S3_BUCKET)
+  BUCKET_NAME: ${{ vars.AWS_S3_BUCKET || 'oceanbase-seekdb-builds' }}
+  DESTINATION_TARGET_PATH: ${{ vars.DESTINATION_TARGET_PATH || format('s3://oceanbase-seekdb-builds/libseekdb/all_commits/{0}', github.sha) }}
+  S3_BUCKET: ${{ vars.AWS_S3_BUCKET || 'oceanbase-seekdb-builds' }}
+  S3_PREFIX: libseekdb/all_commits/${{ github.sha }}
+
+jobs:
+  # ---------- Build libseekdb on Linux / macOS ----------
+  build:
+    name: Build libseekdb (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-22.04
+            artifact_name: libseekdb-linux-x64
+            container_image: quay.io/pypa/manylinux2014_x86_64
+          - platform: linux-arm64
+            runner: ubuntu-22.04-arm
+            artifact_name: libseekdb-linux-arm64
+            container_image: quay.io/pypa/manylinux2014_aarch64
+
+    container:
+      image: ${{ matrix.container_image }}
+      options: --user root
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies (Linux, manylinux2014 / CentOS 7)
+        run: |
+          yum install -y git wget rpm cpio make glibc-devel glibc-headers binutils m4 python3 libtool libaio ncurses-devel which
+          yum install -y zlib-devel 2>/dev/null || true
+
+      - name: Cache deps (Linux, el7)
+        uses: actions/cache@v4
+        with:
+          path: deps/3rd
+          key: ${{ runner.os }}-libseekdb-deps-${{ matrix.platform }}-el7-${{ hashFiles('deps/init/oceanbase.el7.x86_64.deps', 'deps/init/oceanbase.el7.aarch64.deps') }}
+          restore-keys: |
+            ${{ runner.os }}-libseekdb-deps-${{ matrix.platform }}-el7-
+
+      - name: Build init (Linux)
+        run: |
+          bash build.sh init
+          echo "$GITHUB_WORKSPACE/deps/3rd/usr/local/oceanbase/devtools/bin" >> $GITHUB_PATH
+
+      - name: Build libseekdb (Linux)
+        env:
+          BUILD_TYPE: release
+        run: |
+          PYVER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          bash build.sh release --init --make -DOB_USE_CCACHE=ON -DBUILD_EMBED_MODE=ON -DPYTHON_VERSION=$PYVER
+          cd build_release && make -j$(nproc) libseekdb
+
+      - name: Pack libseekdb (Linux)
+        run: |
+          cd package/libseekdb && bash libseekdb-build.sh "$GITHUB_WORKSPACE/build_release/src/include"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: package/libseekdb/libseekdb-*.zip
+
+  # ---------- Build on macOS (no container) ----------
+  build-macos:
+    name: Build libseekdb (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-x64
+            runner: macos-14
+            artifact_name: libseekdb-darwin-x64
+            arch: x86_64
+            cmake_arch: x86_64
+          - platform: darwin-arm64
+            runner: macos-14
+            artifact_name: libseekdb-darwin-arm64
+            arch: arm64
+            cmake_arch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install macOS dependencies
+        run: brew install cmake dylibbundler || true
+
+      - name: Cache deps (macOS)
+        uses: actions/cache@v4
+        with:
+          path: deps/3rd
+          key: ${{ runner.os }}-libseekdb-deps-${{ matrix.platform }}-${{ hashFiles('deps/init/oceanbase.macos.arm64.deps') }}
+          restore-keys: |
+            ${{ runner.os }}-libseekdb-deps-${{ matrix.platform }}-
+
+      - name: Build init (macOS)
+        run: bash build.sh init
+
+      - name: Build libseekdb (macOS)
+        env:
+          BUILD_TYPE: release
+          ARCH: ${{ matrix.arch }}
+          CMAKE_OSX_ARCHITECTURES: ${{ matrix.cmake_arch }}
+        run: |
+          bash build.sh release --init --make -DOB_USE_CCACHE=ON -DBUILD_EMBED_MODE=ON -DCMAKE_OSX_ARCHITECTURES=${{ matrix.cmake_arch }} -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          cd build_release && make -j$(sysctl -n hw.ncpu) libseekdb
+
+      - name: Pack libseekdb (macOS)
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: cd package/libseekdb && bash libseekdb-build.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: package/libseekdb/libseekdb-*.zip
+
+  # ---------- Collect libseekdb artifacts and upload to S3 ----------
+  release-artifacts:
+    name: Collect artifacts and upload to S3
+    runs-on: ubuntu-22.04
+    needs:
+      - build
+      - build-macos
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: List all artifacts
+        run: |
+          echo "=== All artifacts ==="
+          find release-artifacts -type f | sort
+
+      - name: Upload combined artifact (for workflow download)
+        uses: actions/upload-artifact@v4
+        with:
+          name: libseekdb-all-platforms
+          path: release-artifacts/
+
+      - name: Configure AWS credentials
+        if: env.DESTINATION_TARGET_PATH != '' || env.S3_BUCKET != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload to S3
+        if: env.DESTINATION_TARGET_PATH != '' || env.S3_BUCKET != ''
+        run: |
+          set -e
+          if [ -n "${{ env.DESTINATION_TARGET_PATH }}" ]; then
+            S3_TARGET="${{ env.DESTINATION_TARGET_PATH }}"
+          else
+            S3_TARGET="s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}/"
+          fi
+          [ "${S3_TARGET: -1}" != "/" ] && S3_TARGET="${S3_TARGET}/"
+          echo "Uploading to $S3_TARGET"
+          aws s3 sync release-artifacts/ "$S3_TARGET" --exclude "*" --include "*.zip" --no-progress
+          echo "Uploaded:"
+          aws s3 ls "$S3_TARGET" --recursive
+          echo "Done."
+        continue-on-error: true
