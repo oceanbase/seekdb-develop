@@ -93,11 +93,20 @@ jobs:
             ${{ matrix.container_image }} \
             bash -c '
               set -e
-              yum install -y git wget rpm cpio make glibc-devel glibc-headers binutils m4 python3 python3-devel libtool libaio ncurses-devel which zlib-devel ccache 2>/dev/null || true
+              # Install deps in two steps: base first (wget required for dep_create.sh), then ccache if available
+              yum install -y git wget rpm cpio make glibc-devel glibc-headers binutils m4 python3 python3-devel libtool libaio ncurses-devel which zlib-devel
+              yum install -y epel-release 2>/dev/null || true
+              yum install -y ccache 2>/dev/null || true
               git config --global --add safe.directory "$GITHUB_WORKSPACE"
               export PATH="$GITHUB_WORKSPACE/deps/3rd/usr/local/oceanbase/devtools/bin:$PATH"
               export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
-              export OB_CCACHE=$(which ccache)
+              mkdir -p deps/3rd/usr/local/oceanbase/devtools/bin
+              if command -v ccache >/dev/null 2>&1; then
+                ln -sf "$(which ccache)" deps/3rd/usr/local/oceanbase/devtools/bin/ccache
+                USE_CCACHE="-DOB_USE_CCACHE=ON"
+              else
+                USE_CCACHE="-DOB_USE_CCACHE=OFF"
+              fi
               bash build.sh init
               if [ -x /opt/python/cp39-cp39/bin/python3.9 ]; then
                 export PATH="/opt/python/cp39-cp39/bin:$PATH"
@@ -105,7 +114,7 @@ jobs:
               else
                 PYVER=$(python3 -c "import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")")
               fi
-              bash build.sh release --init -DOB_USE_CCACHE=ON -DBUILD_EMBED_MODE=ON -DPYTHON_VERSION=$PYVER
+              bash build.sh release --init $USE_CCACHE -DBUILD_EMBED_MODE=ON -DPYTHON_VERSION=$PYVER
               cd build_release && make -j$(nproc) libseekdb
               cd package/libseekdb && bash libseekdb-build.sh "$GITHUB_WORKSPACE/build_release/src/include"
             '
@@ -169,7 +178,9 @@ jobs:
           CMAKE_OSX_ARCHITECTURES: ${{ matrix.cmake_arch }}
           CCACHE_DIR: ${{ github.workspace }}/.ccache
         run: |
-          export OB_CCACHE=$(which ccache)
+          # Env.cmake looks for ccache in deps/3rd/.../devtools/bin; put it there so no Env.cmake change is needed
+          mkdir -p deps/3rd/usr/local/oceanbase/devtools/bin
+          ln -sf "$(which ccache)" deps/3rd/usr/local/oceanbase/devtools/bin/ccache
           bash build.sh release --init -DOB_USE_CCACHE=ON -DBUILD_EMBED_MODE=ON -DCMAKE_OSX_ARCHITECTURES=${{ matrix.cmake_arch }} -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
           cd build_release && make -j$(sysctl -n hw.ncpu) libseekdb
 
