@@ -34,7 +34,7 @@ runs:
       run: |
         bash build.sh debug -DOB_USE_CCACHE=ON
         ccache -z
-        cd build_debug && make -j4
+        cd build_release && make -j4
         ccache -s
 
     # Use Python already installed by caller (e.g. compile.yml: python3 on Ubuntu). Pass version so embed CMake finds it.
@@ -44,7 +44,7 @@ runs:
         PYVER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
         bash build.sh release -DOB_USE_CCACHE=ON -DBUILD_EMBED_MODE=ON -DPYTHON_VERSION=$PYVER
         ccache -z
-        cd build_debug && make -j4 libseekdb
+        cd build_release && make -j4 libseekdb
         ccache -s
 
     - name: Test Node.js FFI binding
