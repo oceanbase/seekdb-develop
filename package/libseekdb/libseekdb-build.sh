@@ -105,7 +105,7 @@ else
   esac
 fi
 
-# Zip name uses x64 for x86_64 (darwin-x64, linux-x64)
+# Zip name uses x64 for x86_64 (linux-x64)
 ARCH_SUFFIX="${ARCH}"
 [[ "$ARCH" == "x86_64" ]] && ARCH_SUFFIX="x64"
 ZIP_NAME="libseekdb-${OS}-${ARCH_SUFFIX}.zip"
