@@ -100,15 +100,16 @@ jobs:
               yum install -y epel-release 2>/dev/null || true
               yum install -y ccache 2>/dev/null || true
               git config --global --add safe.directory "$GITHUB_WORKSPACE"
-              export PATH="$GITHUB_WORKSPACE/deps/3rd/usr/local/oceanbase/devtools/bin:$PATH"
               export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
               mkdir -p deps/3rd/usr/local/oceanbase/devtools/bin
-              if command -v ccache >/dev/null 2>&1; then
-                ln -sf "$(which ccache)" deps/3rd/usr/local/oceanbase/devtools/bin/ccache
+              CCACHE_SRC=$(command -v ccache 2>/dev/null || true)
+              if [ -n "$CCACHE_SRC" ] && [ -x "$CCACHE_SRC" ]; then
+                ln -sf "$CCACHE_SRC" deps/3rd/usr/local/oceanbase/devtools/bin/ccache
                 USE_CCACHE="-DOB_USE_CCACHE=ON"
               else
                 USE_CCACHE="-DOB_USE_CCACHE=OFF"
               fi
+              export PATH="$GITHUB_WORKSPACE/deps/3rd/usr/local/oceanbase/devtools/bin:$PATH"
               bash build.sh init
               if [ -x /opt/python/cp39-cp39/bin/python3.9 ]; then
                 export PATH="/opt/python/cp39-cp39/bin:$PATH"
