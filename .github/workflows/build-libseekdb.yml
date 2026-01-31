@@ -170,7 +170,7 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Install macOS dependencies
-        run: brew install cmake dylibbundler googletest ccache pybind11 || true
+        run: brew install cmake dylibbundler googletest ccache pybind11 utf8proc thrift re2 brotli bzip2 || true
 
       - name: Cache deps (macOS)
         uses: actions/cache@v4
