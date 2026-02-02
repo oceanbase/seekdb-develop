@@ -101,6 +101,8 @@ jobs:
               yum install -y ccache 2>/dev/null || true
               git config --global --add safe.directory "$GITHUB_WORKSPACE"
               export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
+              export CCACHE_COMPILERCHECK=content
+              export CCACHE_NOHASHDIR=1
               mkdir -p deps/3rd/usr/local/oceanbase/devtools/bin
               CCACHE_SRC=$(command -v ccache 2>/dev/null || true)
               if [ -n "$CCACHE_SRC" ] && [ -x "$CCACHE_SRC" ]; then
@@ -119,6 +121,7 @@ jobs:
               fi
               bash build.sh release --init $USE_CCACHE -DBUILD_EMBED_MODE=ON -DPYTHON_VERSION=$PYVER
               cd build_release && make -j$(nproc) libseekdb
+              [ -n "$USE_CCACHE" ] && ccache -s || true
               cd "$GITHUB_WORKSPACE/package/libseekdb" && bash libseekdb-build.sh "$GITHUB_WORKSPACE/build_release/src/include"
             '
       - name: Fix ownership (container writes as root)
@@ -191,6 +194,8 @@ jobs:
           ARCH: ${{ matrix.arch }}
           CMAKE_OSX_ARCHITECTURES: ${{ matrix.cmake_arch }}
           CCACHE_DIR: ${{ github.workspace }}/.ccache
+          CCACHE_COMPILERCHECK: content
+          CCACHE_NOHASHDIR: 1
         run: |
           # Env.cmake looks for ccache in deps/3rd/.../devtools/bin; put it there so no Env.cmake change is needed
           mkdir -p deps/3rd/usr/local/oceanbase/devtools/bin
@@ -199,6 +204,7 @@ jobs:
           PYVER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
           bash build.sh release --init -DOB_USE_CCACHE=ON -DBUILD_EMBED_MODE=ON -DPYTHON_VERSION=$PYVER -DCMAKE_OSX_ARCHITECTURES=${{ matrix.cmake_arch }} -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
           cd build_release && make -j$(sysctl -n hw.ncpu) libseekdb
+          ccache -s
 
       - name: Pack libseekdb (macOS)
         env:
