@@ -1073,8 +1073,9 @@ void seekdb_close(void) {
 // DDL refresh visibility: so listCollections / SHOW TABLES see latest tables after DDL
 // =============================================================================
 // - refresh_session_schema_version: refresh_and_add_schema then set session last_schema_version
+// - check_and_refresh_schema_for_embed: align with MySQL protocol (ObMPBase::check_and_refresh_schema):
+//   only refresh when tenant local_version < session last_version; else skip to avoid heavy refresh on every read/write.
 // - is_write_sql: DDL/DML (create/drop/alter/insert/update/delete/truncate) -> refresh after execute_read
-// - is_schema_read_sql: SHOW TABLES etc. -> refresh before execute_read so read sees latest
 
 static void refresh_session_schema_version(oceanbase::sql::ObSQLSessionInfo* session) {
     if (OB_ISNULL(session) || OB_ISNULL(GCTX.schema_service_)) return;
@@ -1099,6 +1100,26 @@ static void refresh_session_schema_version(oceanbase::sql::ObSQLSessionInfo* ses
     (void)session->update_sys_variable(oceanbase::share::SYS_VAR_OB_LAST_SCHEMA_VERSION, schema_version);
 }
 
+// Align with MySQL protocol: ObMPBase::check_and_refresh_schema. Only refresh when server (local) is behind session (last).
+static void check_and_refresh_schema_for_embed(oceanbase::sql::ObSQLSessionInfo* session) {
+    if (OB_ISNULL(session) || OB_ISNULL(GCTX.schema_service_)) return;
+    uint64_t tenant_id = session->get_effective_tenant_id();
+    int64_t local_version = OB_INVALID_VERSION;
+    int64_t last_version = OB_INVALID_VERSION;
+    if (OB_SUCCESS != GCTX.schema_service_->get_tenant_refreshed_schema_version(tenant_id, local_version)) {
+        refresh_session_schema_version(session);
+        return;
+    }
+    if (OB_SUCCESS != session->get_ob_last_schema_version(last_version)) {
+        refresh_session_schema_version(session);
+        return;
+    }
+    if (local_version >= last_version) {
+        return;  // skip: server already has at least what session has
+    }
+    refresh_session_schema_version(session);
+}
+
 static bool is_write_sql(const char* sql) {
     if (!sql) return false;
     std::string s(sql);
@@ -1109,17 +1130,6 @@ static bool is_write_sql(const char* sql) {
     return lower.find("create ") == 0 || lower.find("drop ") == 0 || lower.find("alter ") == 0
         || lower.find("insert ") == 0 || lower.find("update ") == 0 || lower.find("delete ") == 0
         || lower.find("truncate ") == 0;
-}
-
-static bool is_schema_read_sql(const char* sql) {
-    if (!sql) return false;
-    std::string s(sql);
-    size_t start = s.find_first_not_of(" \t\n\r;");
-    if (start == std::string::npos) return false;
-    std::string lower = s.substr(start);
-    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-    return lower.find("show tables") == 0 || lower.find("show create table") == 0
-        || lower.find("show table status") == 0;
 }
 
 // Internal implementation of seekdb_connect, called on a dedicated stack
@@ -1272,8 +1282,7 @@ static int do_seekdb_connect_inner(ConnectParams* params) {
             conn->embed_conn = static_cast<ObInnerSQLConnection*>(inner_conn);
             conn->initialized = true;
             *handle = static_cast<SeekdbHandle>(conn);
-            // DDL visibility: new connection sees latest schema.
-            refresh_session_schema_version(conn->embed_session);
+            // Align with MySQL protocol: no schema refresh on connect; first query will do check_and_refresh_schema_for_embed.
             // Reset warning buffer after connect (aligned with Python embed)
             ob_setup_tsi_warning_buffer(NULL);
             params->result = SEEKDB_SUCCESS;
@@ -1309,6 +1318,11 @@ int seekdb_connect(SeekdbHandle* handle, const char* database, bool autocommit) 
     
     do_seekdb_connect_inner(&params);
     
+    // Explicit USE database so the physical connection is in the requested database (multi-connection
+    // same-path: each connection must run USE to avoid wrong-database reads).
+    if (params.result == SEEKDB_SUCCESS && database && strlen(database) > 0) {
+        (void)seekdb_select_db(*handle, database);
+    }
     return params.result;
 }
 
@@ -1602,9 +1616,9 @@ static int do_seekdb_execute_inner(ExecuteParams* params) {
     }
     new (conn->embed_result) ObCommonSqlProxy::ReadResult();
     
-    // DDL visibility: before SHOW TABLES / listCollections, refresh so read sees latest tables.
-    if (is_schema_read_sql(params->sql) && OB_NOT_NULL(conn->embed_session)) {
-        refresh_session_schema_version(conn->embed_session);
+    // DDL / read-after-write visibility: align with MySQL protocol — check and refresh only when server is behind session.
+    if (OB_NOT_NULL(conn->embed_session)) {
+        check_and_refresh_schema_for_embed(conn->embed_session);
     }
     
     ret = conn->embed_conn->execute_read(OB_SYS_TENANT_ID, sql_string, *conn->embed_result, true);
@@ -1645,11 +1659,12 @@ static int do_seekdb_execute_inner(ExecuteParams* params) {
         return OB_SUCCESS;
     }
 
-    // DDL visibility: after DDL/DML via execute_read (e.g. CREATE TABLE), refresh so listCollections sees new table.
-    if (is_write_sql(params->sql) && OB_NOT_NULL(conn->embed_session)) {
+    // DDL / read-after-write visibility: after DDL/DML via execute_read, one refresh + sync session (align with MySQL DDL path).
+    if (is_write_sql(params->sql) && OB_NOT_NULL(conn->embed_session) && OB_NOT_NULL(GCTX.schema_service_)) {
         refresh_session_schema_version(conn->embed_session);
+        (void)oceanbase::sql::ObSQLUtils::update_session_last_schema_version(*GCTX.schema_service_, *conn->embed_session);
     }
-
+    
     sql_result = conn->embed_result->get_result();
     
     if (!sql_result) {
@@ -3011,6 +3026,11 @@ static int do_seekdb_execute_update_inner(ExecuteUpdateParams* params) {
         conn->embed_result = nullptr;
     }
     
+    // Align with MySQL protocol: check and refresh only when server is behind session.
+    if (OB_NOT_NULL(conn->embed_session)) {
+        check_and_refresh_schema_for_embed(conn->embed_session);
+    }
+    
     ObString sql_string(sql);
     ret = conn->embed_conn->execute_write(OB_SYS_TENANT_ID, sql_string, rows, true);
     
@@ -3020,9 +3040,10 @@ static int do_seekdb_execute_update_inner(ExecuteUpdateParams* params) {
     }
     ob_setup_tsi_warning_buffer(NULL);
     
-    // DDL visibility: after execute_write (e.g. CREATE TABLE), refresh so listCollections sees new table.
-    if (OB_SUCCESS == ret && OB_NOT_NULL(conn->embed_session)) {
+    // DDL / read-after-write visibility: after execute_write, one refresh + sync session (align with MySQL DDL path).
+    if (OB_SUCCESS == ret && OB_NOT_NULL(conn->embed_session) && OB_NOT_NULL(GCTX.schema_service_)) {
         refresh_session_schema_version(conn->embed_session);
+        (void)oceanbase::sql::ObSQLUtils::update_session_last_schema_version(*GCTX.schema_service_, *conn->embed_session);
     }
     
     if (OB_SUCCESS == ret) {
@@ -3360,9 +3381,9 @@ int seekdb_select_db(SeekdbHandle handle, const char* db) {
     if (result) {
         seekdb_result_free(result);
     }
-    // DDL visibility: after USE db, refresh so subsequent SELECT sees latest schema for that database.
+    // Align with MySQL protocol: after USE db, check and refresh only when server is behind session.
     if (conn->embed_session) {
-        refresh_session_schema_version(conn->embed_session);
+        check_and_refresh_schema_for_embed(conn->embed_session);
     }
     
     return SEEKDB_SUCCESS;
