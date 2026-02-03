@@ -769,33 +769,19 @@ static int do_seekdb_open_inner(const char* db_dir, int port) {
         
         OB_LOGGER.set_log_level("INFO");
         
-        // Align with Python embed (ob_embed_impl.cpp): redirect stdout so "successfully init log writer"
-        // (LOG_STDOUT in ob_base_log_writer.cpp during set_file_name) goes to log file, not terminal.
-        // Open log file first, redirect stdout to it, then set_file_name; then sync stdout to logger's fd.
-        int saved_stdout = dup(STDOUT_FILENO);
+        // Align with Python embed (ob_embed_impl.cpp do_open_): set_file_name then redirect stdout
+        // to logger fd so any LOG_STDOUT during OBSERVER.init() goes to log file, not terminal.
         ObSqlString log_file;
         try {
             if (OB_FAIL(log_file.assign_fmt("%s/log/seekdb.log", opts.base_dir_.ptr()))) {
                 set_error(nullptr, "calculate log file failed");
             } else {
-                int fd_pre = open(log_file.ptr(), O_WRONLY | O_CREAT | O_APPEND, 0644);
-                if (fd_pre >= 0) {
-                    dup2(fd_pre, STDOUT_FILENO);
-                }
                 OB_LOGGER.set_file_name(log_file.ptr(), true, false);
-                if (fd_pre >= 0) {
-                    dup2(OB_LOGGER.get_svr_log().fd_, STDOUT_FILENO);
-                    close(fd_pre);
-                }
             }
         } catch (const std::exception& e) {
-            if (saved_stdout >= 0) {
-                dup2(saved_stdout, STDOUT_FILENO);
-                close(saved_stdout);
-            }
             return SEEKDB_ERROR_MEMORY_ALLOC;
         }
-        // Redirect stdout to log file during OBSERVER.init() (same as Python embed after set_file_name)
+        int saved_stdout = dup(STDOUT_FILENO);
         if (OB_SUCC(ret)) {
             dup2(OB_LOGGER.get_svr_log().fd_, STDOUT_FILENO);
         }
