@@ -368,6 +368,62 @@ TestResult test_ddl_operations() {
     return {true, ""};
 }
 
+// Test DDL visibility: after CREATE TABLE via seekdb_query(), SHOW TABLES (or catalog query)
+// must see the new table. Reproduces listCollections returning 0 when DDL is done via read path.
+TestResult test_ddl_visibility_after_create() {
+    SeekdbHandle handle = nullptr;
+    int ret = seekdb_connect(&handle, "test", true);
+    if (ret != SEEKDB_SUCCESS) {
+        return {false, "Failed to connect"};
+    }
+    SeekdbResult result = nullptr;
+    static const char* table_name = "ddl_vis_test_table";
+    ret = seekdb_query(handle, "DROP TABLE IF EXISTS ddl_vis_test_table", &result);
+    if (result) seekdb_result_free(result);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to drop table before test"};
+    }
+    ret = seekdb_query(handle, "CREATE TABLE ddl_vis_test_table (id INT PRIMARY KEY)", &result);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_connect_close(handle);
+        return {false, "Failed to create table"};
+    }
+    if (result) seekdb_result_free(result);
+    ret = seekdb_query(handle, "SHOW TABLES", &result);
+    if (ret != SEEKDB_SUCCESS) {
+        seekdb_query(handle, "DROP TABLE IF EXISTS ddl_vis_test_table", &result);
+        if (result) seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Failed to run SHOW TABLES"};
+    }
+    result = seekdb_store_result(handle);
+    if (result == nullptr) {
+        seekdb_query(handle, "DROP TABLE IF EXISTS ddl_vis_test_table", &result);
+        if (result) seekdb_result_free(result);
+        seekdb_connect_close(handle);
+        return {false, "Failed to store SHOW TABLES result"};
+    }
+    bool found = false;
+    char name_buf[256];
+    SeekdbRow row;
+    while ((row = seekdb_fetch_row(result)) != nullptr) {
+        if (seekdb_row_get_string(row, 0, name_buf, sizeof(name_buf)) == SEEKDB_SUCCESS &&
+            strcmp(name_buf, table_name) == 0) {
+            found = true;
+            break;
+        }
+    }
+    seekdb_result_free(result);
+    seekdb_query(handle, "DROP TABLE IF EXISTS ddl_vis_test_table", &result);
+    if (result) seekdb_result_free(result);
+    seekdb_connect_close(handle);
+    if (!found) {
+        return {false, "SHOW TABLES did not show ddl_vis_test_table after CREATE TABLE (DDL visibility)"};
+    }
+    return {true, ""};
+}
+
 // Test DML operations
 TestResult test_dml_operations() {
     SeekdbHandle handle = nullptr;
@@ -2657,6 +2713,32 @@ TestResult test_empty_json_metadata() {
     return {true, ""};
 }
 
+// Same-process same-path reuse: second seekdb_open() with same path (relative) must return success (no "db opened by other process").
+TestResult test_embedded_same_path_reuse_relative() {
+    // Database already opened in main() with "./seekdb.db"; open again with same path must succeed
+    int ret = seekdb_open("./seekdb.db");
+    if (ret != SEEKDB_SUCCESS) {
+        const char* err = seekdb_last_error();
+        return {false, std::string("second seekdb_open(\"./seekdb.db\") should succeed, got: ") + (err ? err : "unknown")};
+    }
+    return {true, ""};
+}
+
+// Same-process same-path reuse: seekdb_open() with absolute path to same db must return success (embedded absolute path fix).
+TestResult test_embedded_same_path_reuse_absolute() {
+    char cwd[4096];
+    if (getcwd(cwd, sizeof(cwd)) == nullptr) {
+        return {false, "getcwd failed"};
+    }
+    std::string abs_path = std::string(cwd) + "/seekdb.db";
+    int ret = seekdb_open(abs_path.c_str());
+    if (ret != SEEKDB_SUCCESS) {
+        const char* err = seekdb_last_error();
+        return {false, std::string("seekdb_open(absolute path) should succeed, got: ") + (err ? err : "unknown")};
+    }
+    return {true, ""};
+}
+
 // Test seekdb_affected_rows() and seekdb_insert_id()
 TestResult test_affected_rows_and_insert_id() {
     SeekdbHandle handle = nullptr;
@@ -4266,6 +4348,8 @@ int main() {
         {"Very Long Document 100KB (embedded)", test_very_long_document_100kb},
         {"Special Characters in Metadata (embedded)", test_special_characters_in_metadata},
         {"Empty JSON Metadata (embedded)", test_empty_json_metadata},
+        {"Same-Process Same-Path Reuse (relative)", test_embedded_same_path_reuse_relative},
+        {"Same-Process Same-Path Reuse (absolute)", test_embedded_same_path_reuse_absolute},
         {"Row Get Types", test_row_get_types},
         
         // ========== 4. Transaction Management ==========
@@ -4274,6 +4358,7 @@ int main() {
         
         // ========== 5. DDL/DML Operations ==========
         {"DDL Operations", test_ddl_operations},
+        {"DDL Visibility After Create (SHOW TABLES)", test_ddl_visibility_after_create},
         {"DML Operations", test_dml_operations},
         {"Affected Rows and Insert ID", test_affected_rows_and_insert_id},
         

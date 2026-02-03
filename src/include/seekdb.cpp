@@ -41,6 +41,8 @@
 #include "sql/session/ob_sql_session_info.h"
 #include "share/schema/ob_schema_getter_guard.h"
 #include "share/schema/ob_multi_version_schema_service.h"
+#include "share/schema/ob_server_schema_service.h"
+#include "lib/container/ob_array.h"
 #include "sql/parser/ob_parser.h"
 #include "sql/parser/parse_node.h"
 #include "share/schema/ob_priv_type.h"
@@ -49,6 +51,7 @@
 #include "share/system_variable/ob_system_variable.h"
 #include "share/system_variable/ob_sys_var_class_type.h"
 #include "share/ob_errno.h"  // For ob_strerror
+#include "sql/ob_sql_utils.h"  // For ObSQLUtils::update_session_last_schema_version (DDL visibility)
 #include "lib/ob_define.h"  // For OB_SYS_TENANT_NAME, OB_SYS_USER_ID
 #include "lib/profile/ob_trace_id.h"  // For ObCurTraceId
 #include "observer/omt/ob_tenant_node_balancer.h"  // For ObTenantNodeBalancer
@@ -284,6 +287,7 @@ static bool g_embedded_opened = false;
 static ObSqlString g_embedded_pid_file;
 static bool g_embedded_pid_locked = false;
 static char g_embedded_work_dir[PATH_MAX];
+static char g_embedded_base_dir[PATH_MAX] = {0};  // Absolute path: opened db path for same-path reuse
 static bool g_closing = false;  // Flag to indicate we're in closing process
 static struct sigaction g_old_segv_handler;  // Store original SIGSEGV handler
 static bool g_segv_handler_installed = false;
@@ -312,7 +316,13 @@ static void segv_handler_during_close(int sig, siginfo_t* info, void* context) {
 // Use OBSERVER macro directly like Python embed does
 // No need to cache since ObServer::get_instance() is a singleton
 
-// Helper function to convert path to absolute
+// =============================================================================
+// Absolute path handling: same-process reuse when multiple clients use same path
+// =============================================================================
+// - to_absolute_path: normalize db_dir to absolute for opts and for comparison
+// - same_embedded_path: compare two paths (e.g. requested vs g_embedded_base_dir)
+// - g_embedded_base_dir: stored absolute path of opened db; reuse open if same path
+
 static int to_absolute_path(const char* cwd, ObSqlString& dir) {
     int ret = OB_SUCCESS;
     if (!dir.empty() && dir.ptr()[0] != '\0' && dir.ptr()[0] != '/') {
@@ -324,6 +334,38 @@ static int to_absolute_path(const char* cwd, ObSqlString& dir) {
         }
     }
     return ret;
+}
+
+// Normalize path for comparison: strip trailing slash (except for "/")
+static void path_normalize_for_cmp(const char* path_in, char* out, size_t out_size) {
+    if (!path_in || out_size == 0) return;
+    size_t len = strlen(path_in);
+    while (len > 1 && path_in[len - 1] == '/') len--;
+    size_t n = len < out_size - 1 ? len : out_size - 1;
+    memcpy(out, path_in, n);
+    out[n] = '\0';
+}
+
+static bool same_embedded_path(const char* a, const char* b) {
+    char na[PATH_MAX], nb[PATH_MAX];
+    path_normalize_for_cmp(a, na, sizeof(na));
+    path_normalize_for_cmp(b, nb, sizeof(nb));
+    return strcmp(na, nb) == 0;
+}
+
+static int read_pid_from_file(const char* pidfile, long& pid_out) {
+    int fd = open(pidfile, O_RDONLY);
+    if (fd < 0) return -1;
+    char buf[64];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return -1;
+    buf[n] = '\0';
+    char* end = nullptr;
+    long pid = strtol(buf, &end, 10);
+    if (end == buf || pid <= 0) return -1;
+    pid_out = pid;
+    return 0;
 }
 
 // Helper function to convert ObString to std::string
@@ -403,10 +445,36 @@ static void seekdb_library_init() {
 // - If port <= 0: embed_mode = true (embedded mode)
 static int do_seekdb_open_inner(const char* db_dir, int port) {
     if (g_embedded_opened) {
-        return SEEKDB_SUCCESS;  // Already opened
+        // Absolute path: same-process reuse if requested path equals g_embedded_base_dir.
+        bool same_path = false;
+        if (g_embedded_base_dir[0] != '\0') {
+            char cwd_buf[PATH_MAX];
+            if (getcwd(cwd_buf, sizeof(cwd_buf)) != nullptr) {
+                ObSqlString req_abs;
+                if (req_abs.assign(db_dir) == OB_SUCCESS && to_absolute_path(cwd_buf, req_abs) == OB_SUCCESS &&
+                    same_embedded_path(req_abs.ptr(), g_embedded_base_dir)) {
+                    same_path = true;
+                }
+            }
+        }
+        if (same_path) {
+            return SEEKDB_SUCCESS;
+        }
+        // Different path: close current embedded DB, then reopen the new path below
+        if (g_embedded_pid_locked) {
+            char pid_path[PATH_MAX];
+            snprintf(pid_path, sizeof(pid_path), "%s/run/seekdb.pid", g_embedded_base_dir);
+            unlink(pid_path);
+            g_embedded_pid_locked = false;
+        }
+        g_embedded_opened = false;
+        g_embedded_base_dir[0] = '\0';
+        if (GCTX.is_inited()) {
+            OBSERVER.destroy();
+            ob_usleep(100 * 1000);  // 100ms
+        }
     }
-    
-    
+
     // Get observer instance
     // CRITICAL: We need to call observer.destroy() to clean up any previous state,
     // but this sets stop_ = true. However, observer.start() checks stop_ status
@@ -429,7 +497,6 @@ static int do_seekdb_open_inner(const char* db_dir, int port) {
     // This avoids setting stop_ = true unnecessarily
     if (GCTX.is_inited()) {
         OBSERVER.destroy();
-        // Wait a bit for cleanup to complete
         ob_usleep(100 * 1000);  // 100ms
     }
     
@@ -668,7 +735,24 @@ static int do_seekdb_open_inner(const char* db_dir, int port) {
     
     try {
         if (OB_SUCC(ret) && OB_FAIL(start_daemon(g_embedded_pid_file.ptr(), true))) {
-            set_error(nullptr, "db opened by other process");
+            // Same-process reuse: if pid file is locked by us, db is already open (e.g. absolute path
+            // used by multiple clients in same process, or race between concurrent open() calls).
+            long pid_in_file = 0;
+            int read_ret = read_pid_from_file(g_embedded_pid_file.ptr(), pid_in_file);
+            if (read_ret == 0 && pid_in_file == static_cast<long>(getpid())) {
+                ret = OB_SUCCESS;
+                g_embedded_opened = true;
+                strncpy(g_embedded_work_dir, work_abs_dir.ptr(), sizeof(g_embedded_work_dir) - 1);
+                g_embedded_work_dir[sizeof(g_embedded_work_dir) - 1] = '\0';
+                strncpy(g_embedded_base_dir, opts.base_dir_.ptr(), sizeof(g_embedded_base_dir) - 1);
+                g_embedded_base_dir[sizeof(g_embedded_base_dir) - 1] = '\0';
+                return SEEKDB_SUCCESS;
+            }
+            if (read_ret != 0) {
+                set_error(nullptr, "database already opened in this process (pid file locked)");
+            } else {
+                set_error(nullptr, "database opened by another process");
+            }
         } else if (OB_SUCC(ret)) {
         }
     } catch (const std::exception& e) {
@@ -680,36 +764,24 @@ static int do_seekdb_open_inner(const char* db_dir, int port) {
         g_embedded_pid_locked = true;
         strncpy(g_embedded_work_dir, work_abs_dir.ptr(), sizeof(g_embedded_work_dir) - 1);
         g_embedded_work_dir[sizeof(g_embedded_work_dir) - 1] = '\0';
+        strncpy(g_embedded_base_dir, opts.base_dir_.ptr(), sizeof(g_embedded_base_dir) - 1);
+        g_embedded_base_dir[sizeof(g_embedded_base_dir) - 1] = '\0';
         
         OB_LOGGER.set_log_level("INFO");
         
-        // Align with Python embed (ob_embed_impl.cpp): redirect stdout so "successfully init log writer"
-        // (LOG_STDOUT in ob_base_log_writer.cpp during set_file_name) goes to log file, not terminal.
-        // Open log file first, redirect stdout to it, then set_file_name; then sync stdout to logger's fd.
-        int saved_stdout = dup(STDOUT_FILENO);
+        // Align with Python embed (ob_embed_impl.cpp do_open_): set_file_name then redirect stdout
+        // to logger fd so any LOG_STDOUT during OBSERVER.init() goes to log file, not terminal.
         ObSqlString log_file;
         try {
             if (OB_FAIL(log_file.assign_fmt("%s/log/seekdb.log", opts.base_dir_.ptr()))) {
                 set_error(nullptr, "calculate log file failed");
             } else {
-                int fd_pre = open(log_file.ptr(), O_WRONLY | O_CREAT | O_APPEND, 0644);
-                if (fd_pre >= 0) {
-                    dup2(fd_pre, STDOUT_FILENO);
-                }
                 OB_LOGGER.set_file_name(log_file.ptr(), true, false);
-                if (fd_pre >= 0) {
-                    dup2(OB_LOGGER.get_svr_log().fd_, STDOUT_FILENO);
-                    close(fd_pre);
-                }
             }
         } catch (const std::exception& e) {
-            if (saved_stdout >= 0) {
-                dup2(saved_stdout, STDOUT_FILENO);
-                close(saved_stdout);
-            }
             return SEEKDB_ERROR_MEMORY_ALLOC;
         }
-        // Redirect stdout to log file during OBSERVER.init() (same as Python embed after set_file_name)
+        int saved_stdout = dup(STDOUT_FILENO);
         if (OB_SUCC(ret)) {
             dup2(OB_LOGGER.get_svr_log().fd_, STDOUT_FILENO);
         }
@@ -844,7 +916,18 @@ int seekdb_open(const char* db_dir) {
     std::lock_guard<std::mutex> lock(g_init_mutex);
     
     if (g_embedded_opened) {
-        return SEEKDB_SUCCESS;  // Already opened
+        // Absolute path: reuse open if same path.
+        if (g_embedded_base_dir[0] != '\0') {
+            char cwd_buf[PATH_MAX];
+            if (getcwd(cwd_buf, sizeof(cwd_buf)) != nullptr) {
+                ObSqlString req_abs;
+                if (req_abs.assign(db_dir) == OB_SUCCESS && to_absolute_path(cwd_buf, req_abs) == OB_SUCCESS &&
+                    same_embedded_path(req_abs.ptr(), g_embedded_base_dir)) {
+                    return SEEKDB_SUCCESS;
+                }
+            }
+        }
+        return SEEKDB_SUCCESS;
     }
     
     // Use CALL_WITH_NEW_STACK to execute on a dedicated stack (aligned with Python embed)
@@ -900,7 +983,17 @@ int seekdb_open_with_service(const char* db_dir, int port) {
     std::lock_guard<std::mutex> lock(g_init_mutex);
     
     if (g_embedded_opened) {
-        return SEEKDB_SUCCESS;  // Already opened
+        if (g_embedded_base_dir[0] != '\0') {
+            char cwd_buf[PATH_MAX];
+            if (getcwd(cwd_buf, sizeof(cwd_buf)) != nullptr) {
+                ObSqlString req_abs;
+                if (req_abs.assign(db_dir) == OB_SUCCESS && to_absolute_path(cwd_buf, req_abs) == OB_SUCCESS &&
+                    same_embedded_path(req_abs.ptr(), g_embedded_base_dir)) {
+                    return SEEKDB_SUCCESS;
+                }
+            }
+        }
+        return SEEKDB_SUCCESS;
     }
     
     // Use CALL_WITH_NEW_STACK to execute on a dedicated stack (aligned with Python embed)
@@ -968,11 +1061,65 @@ void seekdb_close(void) {
             g_embedded_pid_locked = false;
         }
         g_embedded_opened = false;
+        g_embedded_base_dir[0] = '\0';
         
         // Note: We keep g_closing = true to allow signal handler to catch
         // segfaults during static destructors at program exit
         // The signal handler will exit gracefully if segfault occurs
     }
+}
+
+// =============================================================================
+// DDL refresh visibility: so listCollections / SHOW TABLES see latest tables after DDL
+// =============================================================================
+// - refresh_session_schema_version: refresh_and_add_schema then set session last_schema_version
+// - is_write_sql: DDL/DML (create/drop/alter/insert/update/delete/truncate) -> refresh after execute_read
+// - is_schema_read_sql: SHOW TABLES etc. -> refresh before execute_read so read sees latest
+
+static void refresh_session_schema_version(oceanbase::sql::ObSQLSessionInfo* session) {
+    if (OB_ISNULL(session) || OB_ISNULL(GCTX.schema_service_)) return;
+    uint64_t tenant_id = session->get_effective_tenant_id();
+    oceanbase::common::ObArray<uint64_t> tenant_ids;
+    if (OB_SUCCESS == tenant_ids.push_back(tenant_id)) {
+        (void)GCTX.schema_service_->refresh_and_add_schema(tenant_ids, false);
+    }
+    int64_t schema_version = OB_INVALID_VERSION;
+    oceanbase::share::schema::ObServerSchemaService* server_svc =
+        static_cast<oceanbase::share::schema::ObServerSchemaService*>(GCTX.schema_service_);
+    if (OB_SUCCESS == server_svc->get_tenant_schema_version(tenant_id, schema_version)
+        && OB_INVALID_VERSION != schema_version) {
+        (void)session->update_sys_variable(oceanbase::share::SYS_VAR_OB_LAST_SCHEMA_VERSION, schema_version);
+        return;
+    }
+    if (OB_SUCCESS != GCTX.schema_service_->get_tenant_refreshed_schema_version(tenant_id, schema_version)
+        || OB_INVALID_VERSION == schema_version) {
+        (void)oceanbase::sql::ObSQLUtils::update_session_last_schema_version(*GCTX.schema_service_, *session);
+        return;
+    }
+    (void)session->update_sys_variable(oceanbase::share::SYS_VAR_OB_LAST_SCHEMA_VERSION, schema_version);
+}
+
+static bool is_write_sql(const char* sql) {
+    if (!sql) return false;
+    std::string s(sql);
+    size_t start = s.find_first_not_of(" \t\n\r;");
+    if (start == std::string::npos) return false;
+    std::string lower = s.substr(start);
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    return lower.find("create ") == 0 || lower.find("drop ") == 0 || lower.find("alter ") == 0
+        || lower.find("insert ") == 0 || lower.find("update ") == 0 || lower.find("delete ") == 0
+        || lower.find("truncate ") == 0;
+}
+
+static bool is_schema_read_sql(const char* sql) {
+    if (!sql) return false;
+    std::string s(sql);
+    size_t start = s.find_first_not_of(" \t\n\r;");
+    if (start == std::string::npos) return false;
+    std::string lower = s.substr(start);
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    return lower.find("show tables") == 0 || lower.find("show create table") == 0
+        || lower.find("show table status") == 0;
 }
 
 // Internal implementation of seekdb_connect, called on a dedicated stack
@@ -1125,6 +1272,8 @@ static int do_seekdb_connect_inner(ConnectParams* params) {
             conn->embed_conn = static_cast<ObInnerSQLConnection*>(inner_conn);
             conn->initialized = true;
             *handle = static_cast<SeekdbHandle>(conn);
+            // DDL visibility: new connection sees latest schema.
+            refresh_session_schema_version(conn->embed_session);
             // Reset warning buffer after connect (aligned with Python embed)
             ob_setup_tsi_warning_buffer(NULL);
             params->result = SEEKDB_SUCCESS;
@@ -1453,6 +1602,11 @@ static int do_seekdb_execute_inner(ExecuteParams* params) {
     }
     new (conn->embed_result) ObCommonSqlProxy::ReadResult();
     
+    // DDL visibility: before SHOW TABLES / listCollections, refresh so read sees latest tables.
+    if (is_schema_read_sql(params->sql) && OB_NOT_NULL(conn->embed_session)) {
+        refresh_session_schema_version(conn->embed_session);
+    }
+    
     ret = conn->embed_conn->execute_read(OB_SYS_TENANT_ID, sql_string, *conn->embed_result, true);
     
     // Reset warning buffer after execute (aligned with Python embed)
@@ -1490,7 +1644,12 @@ static int do_seekdb_execute_inner(ExecuteParams* params) {
         params->ret_code = SEEKDB_ERROR_QUERY_FAILED;
         return OB_SUCCESS;
     }
-    
+
+    // DDL visibility: after DDL/DML via execute_read (e.g. CREATE TABLE), refresh so listCollections sees new table.
+    if (is_write_sql(params->sql) && OB_NOT_NULL(conn->embed_session)) {
+        refresh_session_schema_version(conn->embed_session);
+    }
+
     sql_result = conn->embed_result->get_result();
     
     if (!sql_result) {
@@ -2861,6 +3020,11 @@ static int do_seekdb_execute_update_inner(ExecuteUpdateParams* params) {
     }
     ob_setup_tsi_warning_buffer(NULL);
     
+    // DDL visibility: after execute_write (e.g. CREATE TABLE), refresh so listCollections sees new table.
+    if (OB_SUCCESS == ret && OB_NOT_NULL(conn->embed_session)) {
+        refresh_session_schema_version(conn->embed_session);
+    }
+    
     if (OB_SUCCESS == ret) {
         *affected_rows = rows;
         params->ret_code = SEEKDB_SUCCESS;
@@ -2871,6 +3035,7 @@ static int do_seekdb_execute_update_inner(ExecuteUpdateParams* params) {
     return OB_SUCCESS;
 }
 
+// Internal/legacy: write-only path. MySQL-aligned usage is seekdb_query() for all SQL + seekdb_affected_rows().
 int seekdb_execute_update(SeekdbHandle handle, const char* sql, int64_t* affected_rows) {
     if (!handle || !sql || !affected_rows) {
         return SEEKDB_ERROR_INVALID_PARAM;
@@ -3194,6 +3359,10 @@ int seekdb_select_db(SeekdbHandle handle, const char* db) {
     
     if (result) {
         seekdb_result_free(result);
+    }
+    // DDL visibility: after USE db, refresh so subsequent SELECT sees latest schema for that database.
+    if (conn->embed_session) {
+        refresh_session_schema_version(conn->embed_session);
     }
     
     return SEEKDB_SUCCESS;

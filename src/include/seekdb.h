@@ -96,11 +96,15 @@ int seekdb_connect(SeekdbHandle* handle, const char* database, bool autocommit);
 void seekdb_connect_close(SeekdbHandle handle);
 
 /**
- * Execute a SQL query
+ * Execute a SQL statement (MySQL C API aligned)
+ * Executes any SQL: SELECT, INSERT, UPDATE, DELETE, DDL (CREATE/DROP/ALTER), etc.
+ * Same as mysql_query() / mysql_real_query(): one API for all statement types.
  * @param handle Connection handle
- * @param query SQL query string (null-terminated)
- * @param result Output parameter for result handle
+ * @param query SQL statement string (null-terminated)
+ * @param result Output parameter for result handle (may be NULL for DML/DDL; use seekdb_store_result() for SELECT)
  * @return SEEKDB_SUCCESS on success, error code otherwise
+ * @note For SELECT: use seekdb_store_result(handle) or the returned result to get rows.
+ * @note For INSERT/UPDATE/DELETE/DDL: use seekdb_affected_rows(handle) after execution for affected row count.
  */
 int seekdb_query(SeekdbHandle handle, const char* query, SeekdbResult* result);
 
@@ -291,7 +295,8 @@ const char* seekdb_error(SeekdbHandle handle);
 unsigned int seekdb_errno(SeekdbHandle handle);
 
 /**
- * Get the number of affected rows
+ * Get the number of affected rows (MySQL C API aligned)
+ * Use after seekdb_query() with INSERT, UPDATE, DELETE, or DDL (like mysql_affected_rows()).
  * @param handle Connection handle
  * @return Number of affected rows, or 0 if no rows were affected
  */
