@@ -25,6 +25,9 @@ struct TestResult {
     std::string message;
 };
 
+// Database path used by main(); set in main() so same-path-reuse tests use it
+static const char* g_db_path = "./seekdb.db";
+
 // Test database open (database is already open in main, just verify it's open)
 TestResult test_open() {
     // Database is already open in main(), so just verify we can create a connection
@@ -2713,13 +2716,13 @@ TestResult test_empty_json_metadata() {
     return {true, ""};
 }
 
-// Same-process same-path reuse: second seekdb_open() with same path (relative) must return success (no "db opened by other process").
+// Same-process same-path reuse: second seekdb_open() with same path must return success (no "db opened by other process").
 TestResult test_embedded_same_path_reuse_relative() {
-    // Database already opened in main() with "./seekdb.db"; open again with same path must succeed
-    int ret = seekdb_open("./seekdb.db");
+    // Re-open with the same path used in main() (relative or absolute)
+    int ret = seekdb_open(g_db_path);
     if (ret != SEEKDB_SUCCESS) {
         const char* err = seekdb_last_error();
-        return {false, std::string("second seekdb_open(\"./seekdb.db\") should succeed, got: ") + (err ? err : "unknown")};
+        return {false, std::string("second seekdb_open(same path) should succeed, got: ") + (err ? err : "unknown")};
     }
     return {true, ""};
 }
@@ -2730,7 +2733,7 @@ TestResult test_embedded_same_path_reuse_absolute() {
     if (getcwd(cwd, sizeof(cwd)) == nullptr) {
         return {false, "getcwd failed"};
     }
-    std::string abs_path = std::string(cwd) + "/seekdb.db";
+    std::string abs_path = (g_db_path[0] == '/') ? g_db_path : (std::string(cwd) + "/" + g_db_path);
     int ret = seekdb_open(abs_path.c_str());
     if (ret != SEEKDB_SUCCESS) {
         const char* err = seekdb_last_error();
@@ -4304,14 +4307,17 @@ TestResult test_stmt_store_result() {
     return {true, ""};
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    // Database path: argv[1] if provided, else default relative path (same as other bindings)
+    g_db_path = (argc >= 2 && argv[1] && argv[1][0] != '\0') ? argv[1] : "./seekdb.db";
+
     std::cout << std::string(70, '=') << std::endl;
     std::cout << "SeekDB C++ Binding Test Suite" << std::endl;
     std::cout << std::string(70, '=') << std::endl;
     std::cout << std::endl;
-    
+
     // Open database once at the beginning
-    int ret = seekdb_open("./seekdb.db");
+    int ret = seekdb_open(g_db_path);
     if (ret != SEEKDB_SUCCESS) {
         std::cerr << "Failed to open database: " << ret << std::endl;
         return 1;

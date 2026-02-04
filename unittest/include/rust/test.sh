@@ -65,6 +65,25 @@ if [ ! -f "$TEST_BIN" ]; then
 fi
 
 "$TEST_BIN" "${DB_DIR}" "test"
+RUST_EXIT=$?
+if [ $RUST_EXIT -ne 0 ]; then
+    echo "First run (relative path) failed with exit $RUST_EXIT"
+    exit $RUST_EXIT
+fi
+
+# Second run: absolute path (same suite, no close+reopen in process)
+DB_DIR_ABS="$(pwd)/seekdb_abs.db"
+rm -rf "${DB_DIR_ABS}"
+echo ""
+echo "Running Rust tests with absolute path: $DB_DIR_ABS"
+echo ""
+"$TEST_BIN" "${DB_DIR_ABS}" "test"
+ABS_EXIT=$?
+rm -rf "${DB_DIR_ABS}" 2>/dev/null || true
+if [ $ABS_EXIT -ne 0 ]; then
+    echo "Second run (absolute path) failed with exit $ABS_EXIT"
+    exit $ABS_EXIT
+fi
 
 echo ""
 echo "Test completed!"
