@@ -832,6 +832,7 @@ if (require.main === module) {
 
 module.exports = {
     testOpen,
+    testAbsolutePathOpen,
     testConnection,
     testErrorHandling,
     testResultOperations,

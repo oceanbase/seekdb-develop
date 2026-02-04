@@ -49,7 +49,26 @@ echo "Running Node.js N-API tests..."
 echo ""
 # Note: C ABI layer handles SIGSEGV gracefully during static destructors
 # Exit code is 0 and no segfault messages are output
-node test.js "$@"
+node test.js "${DB_DIR}" "test"
+NODE_EXIT=$?
+if [ $NODE_EXIT -ne 0 ]; then
+    echo "First run (relative path) failed with exit $NODE_EXIT"
+    exit $NODE_EXIT
+fi
+
+# Second run: absolute path (same suite, no close+reopen in process)
+DB_DIR_ABS="${SCRIPT_DIR}/seekdb_abs.db"
+rm -rf "${DB_DIR_ABS}"
+echo ""
+echo "Running Node.js N-API tests with absolute path: $DB_DIR_ABS"
+echo ""
+node test.js "${DB_DIR_ABS}" "test"
+ABS_EXIT=$?
+rm -rf "${DB_DIR_ABS}" 2>/dev/null || true
+if [ $ABS_EXIT -ne 0 ]; then
+    echo "Second run (absolute path) failed with exit $ABS_EXIT"
+    exit $ABS_EXIT
+fi
 
 echo ""
 echo "Test completed!"
