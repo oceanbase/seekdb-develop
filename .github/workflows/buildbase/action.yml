@@ -54,9 +54,11 @@ runs:
         npm install
         bash test.sh
     
+    # Use system compiler/headers for node-gyp; deps/3rd GCC has different sysroot and breaks bits/libc-header-start.h
     - name: Test Node.js N-API binding
       shell: bash
       run: |
+        PATH=$(echo "$PATH" | tr ':' '\n' | grep -v 'deps/3rd' | tr '\n' ':' | sed 's/:$//')
         cd unittest/include/nodejs_napi
         npm install
         bash test.sh
