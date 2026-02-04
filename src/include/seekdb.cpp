@@ -86,6 +86,26 @@ using namespace oceanbase::lib;
 using namespace oceanbase::omt;
 using namespace oceanbase::palf::election;
 
+// RAII: redirect stdout/stderr to /dev/null for the scope so LOG_STDOUT (e.g. "successfully init log writer") does not print.
+struct SuppressLogStdoutScope {
+    int saved_stdout = -1;
+    int saved_stderr = -1;
+    SuppressLogStdoutScope() {
+        saved_stdout = dup(STDOUT_FILENO);
+        saved_stderr = dup(STDERR_FILENO);
+        int fd = open("/dev/null", O_WRONLY);
+        if (fd >= 0) {
+            dup2(fd, STDOUT_FILENO);
+            dup2(fd, STDERR_FILENO);
+            close(fd);
+        }
+    }
+    ~SuppressLogStdoutScope() {
+        if (saved_stderr >= 0) { dup2(saved_stderr, STDERR_FILENO); close(saved_stderr); }
+        if (saved_stdout >= 0) { dup2(saved_stdout, STDOUT_FILENO); close(saved_stdout); }
+    }
+};
+
 // Thread-local error storage for improved error handling
 thread_local static std::string g_thread_last_error;
 thread_local static int g_thread_last_error_code = SEEKDB_SUCCESS;
@@ -768,22 +788,16 @@ static int do_seekdb_open_inner(const char* db_dir, int port) {
         g_embedded_base_dir[sizeof(g_embedded_base_dir) - 1] = '\0';
         
         OB_LOGGER.set_log_level("INFO");
-        
-        // Align with Python embed (ob_embed_impl.cpp do_open_): set_file_name then redirect stdout
-        // to logger fd so any LOG_STDOUT during OBSERVER.init() goes to log file, not terminal.
+        // set_file_name for log file (same as Python embed ob_embed_impl.cpp do_open_)
         ObSqlString log_file;
         try {
             if (OB_FAIL(log_file.assign_fmt("%s/log/seekdb.log", opts.base_dir_.ptr()))) {
                 set_error(nullptr, "calculate log file failed");
-            } else {
-                OB_LOGGER.set_file_name(log_file.ptr(), true, false);
+                return SEEKDB_ERROR_MEMORY_ALLOC;
             }
+            OB_LOGGER.set_file_name(log_file.ptr(), true, false);
         } catch (const std::exception& e) {
             return SEEKDB_ERROR_MEMORY_ALLOC;
-        }
-        int saved_stdout = dup(STDOUT_FILENO);
-        if (OB_SUCC(ret)) {
-            dup2(OB_LOGGER.get_svr_log().fd_, STDOUT_FILENO);
         }
         
         // Create worker to make this thread having a binding worker (aligned with main.cpp)
@@ -805,25 +819,13 @@ static int do_seekdb_open_inner(const char* db_dir, int port) {
             try {
                 ret = OBSERVER.init(opts, log_cfg);
             } catch (const std::exception& e) {
-                if (saved_stdout >= 0) {
-                    dup2(saved_stdout, STDOUT_FILENO);
-                    close(saved_stdout);
-                }
                 return SEEKDB_ERROR_MEMORY_ALLOC;
             }
         }
         
-        if (saved_stdout >= 0) {
-            dup2(saved_stdout, STDOUT_FILENO);
-            close(saved_stdout);
-        }
-        
-        
-        
         int ret_check = ret;
         
         if (ret_check != 0) {
-            // stdout already restored above
             
             // If OB_INIT_TWICE, it means some static initialization was already done
             // This can happen if sql::init_sql_expr_static_var() was called before
@@ -949,8 +951,8 @@ int seekdb_open(const char* db_dir) {
     // 2. After CALL_WITH_NEW_STACK returns, the stack attrs will be restored to this value
     oceanbase::common::set_stackattr(stack_addr, stack_size);
     
-    // Call with port = 0 for embedded mode (matches Python embed default behavior)
-    int result = CALL_WITH_NEW_STACK(do_seekdb_open_inner(db_dir, 0), stack_addr, stack_size);
+    int result;
+    { SuppressLogStdoutScope _; result = CALL_WITH_NEW_STACK(do_seekdb_open_inner(db_dir, 0), stack_addr, stack_size); }
     
     // CRITICAL: After CALL_WITH_NEW_STACK returns, we're back on the original (Node.js) stack.
     // Instead of clearing the stack attribute cache (which would cause pthread_getattr_np
@@ -1015,10 +1017,8 @@ int seekdb_open_with_service(const char* db_dir, int port) {
     // 2. After CALL_WITH_NEW_STACK returns, the stack attrs will be restored to this value
     oceanbase::common::set_stackattr(stack_addr, stack_size);
     
-    // Match Python embed's behavior:
-    // - If port > 0: embed_mode = false (server mode)
-    // - If port <= 0: embed_mode = true (embedded mode)
-    int result = CALL_WITH_NEW_STACK(do_seekdb_open_inner(db_dir, port), stack_addr, stack_size);
+    int result;
+    { SuppressLogStdoutScope _; result = CALL_WITH_NEW_STACK(do_seekdb_open_inner(db_dir, port), stack_addr, stack_size); }
     
     // CRITICAL: After CALL_WITH_NEW_STACK returns, we're back on the original (Node.js) stack.
     // Instead of clearing the stack attribute cache (which would cause pthread_getattr_np
