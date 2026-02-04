@@ -56,10 +56,12 @@ jobs:
             runner: ubuntu-22.04
             artifact_name: libseekdb-linux-x64
             container_image: quay.io/pypa/manylinux2014_x86_64
+            deps_file: oceanbase.el7.x86_64.deps
           - platform: linux-arm64
             runner: ubuntu-22.04-arm
             artifact_name: libseekdb-linux-arm64
             container_image: quay.io/pypa/manylinux2014_aarch64
+            deps_file: oceanbase.el7.aarch64.deps
 
     steps:
       - name: Checkout
@@ -72,7 +74,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: deps/3rd
-          key: ${{ runner.os }}-libseekdb-deps-${{ matrix.platform }}-el7-${{ hashFiles('deps/init/oceanbase.el7.x86_64.deps', 'deps/init/oceanbase.el7.aarch64.deps') }}
+          key: ${{ runner.os }}-libseekdb-deps-${{ matrix.platform }}-el7-${{ hashFiles(format('deps/init/{0}', matrix.deps_file)) }}
           restore-keys: |
             ${{ runner.os }}-libseekdb-deps-${{ matrix.platform }}-el7-
 
@@ -80,9 +82,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .ccache
-          key: ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}-${{ hashFiles('cmake/Env.cmake', 'src/observer/CMakeLists.txt') }}
+          # Static key per platform so second run always hits; ccache content is keyed by source hash internally
+          key: ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}
           restore-keys: |
-            ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}-
+            ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}
 
       # Run build inside manylinux2014 so Node/actions run on host (glibc 2.28+), build runs in CentOS 7 (glibc 2.17) for compatibility
       - name: Build libseekdb (Linux, manylinux2014)
@@ -138,13 +141,13 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: deps/3rd
-          key: ${{ runner.os }}-libseekdb-deps-${{ matrix.platform }}-el7-${{ hashFiles('deps/init/oceanbase.el7.x86_64.deps', 'deps/init/oceanbase.el7.aarch64.deps') }}
+          key: ${{ runner.os }}-libseekdb-deps-${{ matrix.platform }}-el7-${{ hashFiles(format('deps/init/{0}', matrix.deps_file)) }}
       - name: Save Cache ccache (Linux)
         if: always()
         uses: actions/cache/save@v4
         with:
           path: .ccache
-          key: ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}-${{ hashFiles('cmake/Env.cmake', 'src/observer/CMakeLists.txt') }}
+          key: ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}
 
   # ---------- Build on macOS (no container) ----------
   build-macos:
@@ -181,9 +184,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .ccache
-          key: ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}-${{ hashFiles('cmake/Env.cmake', 'src/observer/CMakeLists.txt') }}
+          # Static key per platform so second run always hits
+          key: ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}
           restore-keys: |
-            ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}-
+            ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}
 
       - name: Build init (macOS)
         run: bash build.sh init
@@ -229,7 +233,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .ccache
-          key: ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}-${{ hashFiles('cmake/Env.cmake', 'src/observer/CMakeLists.txt') }}
+          key: ${{ runner.os }}-ccache-libseekdb-${{ matrix.platform }}
 
   # ---------- Collect libseekdb artifacts and upload to S3 ----------
   release-artifacts:
