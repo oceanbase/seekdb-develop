@@ -1890,10 +1890,10 @@
 /src/observer/ob_req_time_service.h @bin.lb @xiaoyi.xy
 /src/observer/ob_resource_inner_sql_connection_pool.cpp @bin.lb @xiaoyi.xy @zuojiao.hzj
 /src/observer/ob_resource_inner_sql_connection_pool.h @bin.lb @xiaoyi.xy @zuojiao.hzj
-/src/observer/ob_restore_ctx.h @wanhong.wwh @msy164651
-/src/observer/ob_restore_sql_modifier.h @wanhong.wwh @msy164651
-/src/observer/ob_root_service_monitor.cpp @wanhong.wwh @msy164651
-/src/observer/ob_root_service_monitor.h @wanhong.wwh @msy164651
+/src/observer/ob_restore_ctx.h @wanhong.wwh @msy164651 @xingrui.cwh @wangzhennan.wzn @fanfangzhou.ffz
+/src/observer/ob_restore_sql_modifier.h @wanhong.wwh @msy164651 @xingrui.cwh @wangzhennan.wzn @fanfangzhou.ffz
+/src/observer/ob_root_service_monitor.cpp @wanhong.wwh @msy164651 @xingrui.cwh @wangzhennan.wzn @fanfangzhou.ffz
+/src/observer/ob_root_service_monitor.h @wanhong.wwh @msy164651 @xingrui.cwh @wangzhennan.wzn @fanfangzhou.ffz
 /src/observer/ob_rpc_processor_simple.cpp @fangwu.lcc @yuanqi.xhf @nijia.nj @xiaoshi.xjl
 /src/observer/ob_rpc_processor_simple.h @fangwu.lcc @yuanqi.xhf @nijia.nj @xiaoshi.xjl
 /src/observer/embed/python/ob_embed_impl.h @xianlin.lh @nijia.nj @lana.lgx
@@ -1903,11 +1903,11 @@
 /src/observer/ob_server.h @yuanqi.xhf @nijia.nj @xiaoshi.xjl
 /src/observer/ob_server_schema_updater.cpp @wanhong.wwh @msy164651 @xingrui.cwh
 /src/observer/ob_server_schema_updater.h @wanhong.wwh @msy164651 @xingrui.cwh
-/src/observer/ob_server_struct.cpp @wanhong.wwh @msy164651
-/src/observer/ob_server_struct.h @wanhong.wwh @msy164651
+/src/observer/ob_server_struct.cpp @wanhong.wwh @msy164651 @nijia.nj
+/src/observer/ob_server_struct.h @wanhong.wwh @msy164651 @nijia.nj
 /src/observer/ob_service.cpp @wanhong.wwh @msy164651 @yongle.xh @zhenjiang.xzj
 /src/observer/ob_service.h @wanhong.wwh @msy164651 @yongle.xh @zhenjiang.xzj
-/src/observer/ob_srv_xlator_rootserver.cpp @msy164651 @wanhong.wwh
+/src/observer/ob_srv_xlator_rootserver.cpp @msy164651 @wanhong.wwh @wangzhennan.wzn
 /src/observer/ob_startup_accel_task_handler.cpp @fenggu.yh @jiahua.cjh @yunshan.tys @chensen.cs
 /src/observer/ob_startup_accel_task_handler.h @fenggu.yh @jiahua.cjh @yunshan.tys @chensen.cs
 /src/observer/omt/ob_tenant_config_mgr.cpp @fyy280124 @yuanqi.xhf @xiaoshi.xjl
